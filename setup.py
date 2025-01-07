@@ -3,67 +3,80 @@
 
 from setuptools import find_packages, setup
 
-with open("README.md") as readme_file:
+with open("README.md", encoding="utf-8") as readme_file:
     readme = readme_file.read()
 
-with open("HISTORY.md") as history_file:
+with open("HISTORY.md", encoding="utf-8") as history_file:
     history = history_file.read()
 
 # NOTE: Update pinned_reqs whenever install_requires or extras_require changes.
 install_requires = [
-    "numpy>=1.17.0",  # >=1.17.0 that is when default_rng becomes available.
+    # numpy>=1.17.0 is when default_rng becomes available;
+    # scikit-learn 1.1.0 requires numpy 1.17.3+
+    "numpy>=1.17.3",
+    "numpy_groupies>=0.9.16",  # Supports Python 3.7 and up.
     "numba>=0.51.0",
     "pandas>=1.0.0",
-    "toml>=0.10.0",
     "sortedcontainers>=2.0.0",  # Primarily used in SlidingBoundariesArchive.
-    "scikit-learn>=0.20.0",  # Primarily used in CVTArchive.
-    "scipy>=1.4.0",  # Primarily used in CVTArchive.
-    "threadpoolctl>=2.0.0",
+    "scikit-learn>=1.1.0",  # Primarily used in CVTArchive.
+    "scipy>=1.7.0",  # Primarily used in CVTArchive.
+    "threadpoolctl>=3.0.0",
 ]
 
 extras_require = {
-    "visualize": ["matplotlib>=3.0.0",],
-    # Dependencies for examples (NOT tutorials -- tutorial notebooks should
-    # install deps with cell magic and only depend on ribs and ribs[visualize]).
-    "examples": [
+    "visualize": [
         "matplotlib>=3.0.0",
-        "gym~=0.17.0",  # Strict since different gym may give different results.
-        "Box2D~=2.3.10",  # Used in envs such as Lunar Lander.
-        "fire>=0.4.0",
-        "alive-progress>=1.0.0",
+        "shapely>=2.0.0",
+    ],
+    "pycma": ["cma"],
+    # All dependencies except for dev. Don't worry if there are duplicate
+    # dependencies, since setuptools automatically handles duplicates.
+    "all": [
+        ### visualize ###
+        "matplotlib>=3.0.0",
+        "shapely>=2.0.0",
 
-        # Dask
-        "dask>=2.0.0",
-        "distributed>=2.0.0",
-        "bokeh>=2.0.0",  # Dask dashboard.
+        ### cma ###
+        "cma",
     ],
     "dev": [
         "pip>=20.3",
         "pylint",
         "yapf",
+        "pre-commit",
 
         # Testing
+        "python-box[all]~=7.0",
         "pytest==7.0.1",
         "pytest-cov==3.0.0",
         "pytest-benchmark==3.4.1",
         "pytest-xdist==2.5.0",
 
         # Documentation
+        "myst-nb==0.17.1",
         "Sphinx==4.5.0",
-        "sphinx-material==0.0.32",
-        "sphinx-autobuild==2020.9.1",
-        "sphinx-copybutton==0.3.1",
-        "myst-nb==0.15.0",
-        "sphinx-toolbox==3.1.0",
+        "sphinx-autobuild==2021.3.14",
         "sphinx-autodoc-typehints==1.18.2",
-        "sphinx-codeautolink==0.11.0",
+        "sphinx-codeautolink==0.12.1",
+        "sphinx-copybutton==0.3.1",
+        "sphinx-jinja2-compat==0.2.0",
+        "sphinx-material==0.0.32",
+        "sphinx-prompt==1.5.0",
+        "sphinx-tabs==3.3.1",
+        "sphinx-toolbox==3.1.0",
+        "sphinxcontrib-applehelp==1.0.4",
+        "sphinxcontrib-devhelp==1.0.2",
+        "sphinxcontrib-htmlhelp==2.0.1",
+        "sphinxcontrib-jsmath==1.0.1",
+        "sphinxcontrib-qthelp==1.0.3",
+        "sphinxcontrib-serializinghtml==1.1.5",
 
         # Distribution
-        "bump2version==0.5.11",
-        "wheel==0.36.2",
-        "twine==1.14.0",
-        "check-wheel-contents==0.2.0",
-    ]
+        "bump2version==1.0.1",
+        "wheel==0.40.0",
+        "twine==4.0.2",
+        "check-wheel-contents==0.4.0",
+    ],
 }
 
 setup(
@@ -77,10 +90,11 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Natural Language :: English",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "Topic :: Scientific/Engineering",
         "Topic :: Scientific/Engineering :: Mathematics",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -96,9 +110,9 @@ setup(
     keywords="ribs",
     name="ribs",
     packages=find_packages(include=["ribs", "ribs.*"]),
-    python_requires=">=3.7.0",
+    python_requires=">=3.8.0",
     test_suite="tests",
     url="https://github.com/icaros-usc/pyribs",
-    version="0.4.0",
+    version="0.7.1",
     zip_safe=False,
 )

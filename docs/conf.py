@@ -26,7 +26,11 @@ import sphinx_material
 
 import ribs
 
-sys.path.insert(0, os.path.abspath(".."))
+sys.path.insert(0, os.path.abspath(".."))  # Detect ribs.
+sys.path.append(os.path.abspath("./_ext"))  # Detect extensions.
+
+# Set canonical URL from the Read the Docs Domain
+html_baseurl = os.environ.get("READTHEDOCS_CANONICAL_URL", "")
 
 DEV_MODE = os.environ.get("DOCS_MODE", "regular") == "dev"
 READTHEDOCS_VERSION = os.environ.get("READTHEDOCS_VERSION", "stable")
@@ -54,6 +58,7 @@ extensions = [
     "sphinx_toolbox.more_autodoc.autonamedtuple",
     "sphinx_autodoc_typehints",
     "sphinx_codeautolink",
+    "github_links",
 ]
 
 # Napoleon
@@ -66,6 +71,17 @@ napoleon_include_special_with_doc = True
 # MyST NB -- exclude execution of Jupyter notebooks because they can take a
 # while to run.
 nb_execution_mode = "off"
+
+# https://github.com/executablebooks/MyST-NB/issues/441
+myst_enable_extensions = [
+    "amsmath",
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "html_image",
+]
+# Auto-generate heading anchors.
+myst_heading_anchors = 3
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -108,6 +124,8 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # If true, `todo` and `todoList` produce output, else they produce nothing.
 todo_include_todos = False
 
+github_repo_url = "https://github.com/icaros-usc/pyribs/"
+
 # -- Options for HTML output -------------------------------------------
 
 html_show_sourcelink = True
@@ -121,19 +139,24 @@ html_favicon = "_static/imgs/favicon.ico"
 html_title = (f"pyribs (stable - v{version})" if READTHEDOCS_VERSION == "stable"
               else f"pyribs ({READTHEDOCS_VERSION})")
 
+# Tell Jinja2 templates the build is running on Read the Docs
+if os.environ.get("READTHEDOCS", "") == "True":
+    html_context["READTHEDOCS"] = True
+
 # material theme options (see theme.conf for more information)
 html_theme_options = {
     "nav_title": "pyribs",
     "base_url": (f"https://docs.pyribs.org/{READTHEDOCS_LANGUAGE}/"
                  f"{READTHEDOCS_VERSION}/"),
-    "repo_url": "https://github.com/icaros-usc/pyribs/",
+    "repo_url": github_repo_url,
     "repo_name": "pyribs",
     "google_analytics_account": None,
     "html_minify": not DEV_MODE,
     "css_minify": not DEV_MODE,
     #  "logo_icon": "&#xe869",
     "repo_type": "github",
-    "globaltoc_depth": 2,
+    # Needs to be 3 so that tutorials show up in sidebar.
+    "globaltoc_depth": 3,
     "color_primary": "deep-purple",
     "color_accent": "purple",
     "touch_icon": None,
@@ -147,14 +170,12 @@ html_theme_options = {
         "index":
             "A bare-bones Python library for quality diversity optimization."
     },
-    "version_dropdown": False,
+    "version_dropdown": True,
     "version_json": None,
-    #  "version_info": {
-    #      "Release": "https://bashtage.github.io/sphinx-material/",
-    #      "Development": "https://bashtage.github.io/sphinx-material/devel/",
-    #      "Release (rel)": "/sphinx-material/",
-    #      "Development (rel)": "/sphinx-material/devel/",
-    #  },
+    "version_info": {
+        "Stable": "https://docs.pyribs.org/en/stable/",
+        "Latest": "https://docs.pyribs.org/en/latest/",
+    },
     "table_classes": ["plain"],
 }
 
@@ -237,10 +258,13 @@ plot_html_show_source_link = False
 
 # Intersphinx
 intersphinx_mapping = {
-    "matplotlib": ("https://matplotlib.org", None),
+    "matplotlib": ("https://matplotlib.org/stable/", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
     "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
-    "python": ("https://docs.python.org/3", None),
-    "scipy": ("https://docs.scipy.org/doc/scipy/reference", None),
-    "sklearn": ("https://scikit-learn.org/stable", None),
+    "python": ("https://docs.python.org/3/", None),
+    "scipy": ("https://docs.scipy.org/doc/scipy/", None),
+    "sklearn": ("https://scikit-learn.org/stable/", None),
+    "qdax": ("https://qdax.readthedocs.io/en/latest/", None),
+    "shapely": ("https://shapely.readthedocs.io/en/stable/", None),
+    "cma": ("https://cma-es.github.io/apidocs-pycma/", None),
 }

@@ -1,18 +1,20 @@
 """Provides the GaussianEmitter."""
 import numpy as np
-from numba import jit
 
+from ribs._utils import check_batch_shape, check_shape
 from ribs.emitters._emitter_base import EmitterBase
+from ribs.emitters.operators import GaussianOperator
 
 
 class GaussianEmitter(EmitterBase):
     """Emits solutions by adding Gaussian noise to existing archive solutions.
 
-    If the archive is empty, calls to :meth:`ask` will generate solutions from a
-    user-specified Gaussian distribution with mean ``x0`` and standard deviation
-    ``sigma0``. Otherwise, this emitter selects solutions from the archive and
-    generates solutions from a Gaussian distribution centered around each
-    solution with standard deviation ``sigma``.
+    If the archive is empty and ``self._initial_solutions`` is set, a call to
+    :meth:`ask` will return ``self._initial_solutions``. If
+    ``self._initial_solutions`` is not set, we draw from a Gaussian distribution
+    centered at ``self.x0`` with standard deviation ``self.sigma``. Otherwise,
+    each solution is drawn from a distribution centered at a randomly chosen
+    elite with standard deviation ``self.sigma``.
 
     This is the classic variation operator presented in `Mouret 2015
     <https://arxiv.org/pdf/1504.04909.pdf>`_.
@@ -21,16 +23,16 @@ class GaussianEmitter(EmitterBase):
         archive (ribs.archives.ArchiveBase): An archive to use when creating and
             inserting solutions. For instance, this can be
             :class:`ribs.archives.GridArchive`.
-        x0 (array-like): Center of the Gaussian distribution from which to
-            sample solutions when the archive is empty.
         sigma (float or array-like): Standard deviation of the Gaussian
-            distribution when the archive is not empty. Note we assume
-            the Gaussian is diagonal, so if this argument is an array, it
-            must be 1D.
-        sigma0 (float or array-like): Standard deviation of the Gaussian
-            distribution when the archive is empty. If this argument is
-            None, then it defaults to sigma. Note we assume the Gaussian is
-            diagonal, so if this argument is an array, it must be 1D.
+            distribution. Note we assume the Gaussian is diagonal, so if this
+            argument is an array, it must be 1D.
+        x0 (array-like): Center of the Gaussian distribution from which to
+            sample solutions when the archive is empty. Must be 1-dimensional.
+            This argument is ignored if ``initial_solutions`` is set.
+        initial_solutions (array-like): An (n, solution_dim) array of solutions
+            to be used when the archive is empty. If this argument is None, then
+            solutions will be sampled from a Gaussian distribution centered at
+            ``x0`` with standard deviation ``sigma``.
         bounds (None or array-like): Bounds of the solution space. Solutions are
             clipped to these bounds. Pass None to indicate there are no bounds.
             Alternatively, pass an array-like to specify the bounds for each
@@ -41,39 +43,63 @@ class GaussianEmitter(EmitterBase):
         seed (int): Value to seed the random number generator. Set to None to
             avoid a fixed seed.
     Raises:
+        ValueError: There is an error in x0 or initial_solutions.
         ValueError: There is an error in the bounds configuration.
     """
 
     def __init__(self,
                  archive,
-                 x0,
+                 *,
                  sigma,
-                 sigma0=None,
+                 x0=None,
+                 initial_solutions=None,
                  bounds=None,
                  batch_size=64,
                  seed=None):
-        self._rng = np.random.default_rng(seed)
         self._batch_size = batch_size
-        self._x0 = np.array(x0, dtype=archive.dtype)
-        self._sigma = archive.dtype(sigma) if isinstance(
-            sigma,
-            (float, np.floating)) else np.array(sigma, dtype=archive.dtype)
-        self._sigma0 = self._sigma if sigma0 is None else (
-            archive.dtype(sigma0) if isinstance(sigma0, (
-                float, np.floating)) else np.array(sigma0, dtype=archive.dtype))
+        self._sigma = np.array(sigma, dtype=archive.dtypes["solution"])
+        self._x0 = None
+        self._initial_solutions = None
+
+        if x0 is None and initial_solutions is None:
+            raise ValueError("Either x0 or initial_solutions must be provided.")
+        if x0 is not None and initial_solutions is not None:
+            raise ValueError(
+                "x0 and initial_solutions cannot both be provided.")
+
+        if x0 is not None:
+            self._x0 = np.array(x0, dtype=archive.dtypes["solution"])
+            check_shape(self._x0, "x0", archive.solution_dim,
+                        "archive.solution_dim")
+        elif initial_solutions is not None:
+            self._initial_solutions = np.asarray(
+                initial_solutions, dtype=archive.dtypes["solution"])
+            check_batch_shape(self._initial_solutions, "initial_solutions",
+                              archive.solution_dim, "archive.solution_dim")
 
         EmitterBase.__init__(
             self,
             archive,
-            len(self._x0),
-            bounds,
+            solution_dim=archive.solution_dim,
+            bounds=bounds,
         )
+        self._operator = GaussianOperator(sigma=self._sigma,
+                                          lower_bounds=self._lower_bounds,
+                                          upper_bounds=self._upper_bounds,
+                                          seed=seed)
 
     @property
     def x0(self):
         """numpy.ndarray: Center of the Gaussian distribution from which to
-        sample solutions when the archive is empty."""
+        sample solutions when the archive is empty (if initial_solutions is not
+        set)."""
         return self._x0
+
+    @property
+    def initial_solutions(self):
+        """numpy.ndarray: The initial solutions which are returned when the
+        archive is empty (if x0 is not set)."""
+        return self._initial_solutions
 
     @property
     def sigma(self):
@@ -82,48 +108,32 @@ class GaussianEmitter(EmitterBase):
         return self._sigma
 
     @property
-    def sigma0(self):
-        """float or numpy.ndarray: Standard deviation of the (diagonal) Gaussian
-        distribution when the archive is empty."""
-        return self._sigma0
-
-    @property
     def batch_size(self):
         """int: Number of solutions to return in :meth:`ask`."""
         return self._batch_size
 
-    @staticmethod
-    @jit(nopython=True)
-    def _ask_clip_helper(parents, noise, lower_bounds, upper_bounds):
-        """Numba equivalent of np.clip."""
-        return np.minimum(np.maximum(parents + noise, lower_bounds),
-                          upper_bounds)
-
     def ask(self):
         """Creates solutions by adding Gaussian noise to elites in the archive.
 
-        If the archive is empty, solutions are drawn from a (diagonal) Gaussian
-        distribution centered at ``self.x0`` with standard deviation
-        ``self.sigma0``. Otherwise, each solution is drawn from a distribution
-        centered at a randomly chosen elite with standard deviation
-        ``self.sigma``.
+        If the archive is empty and ``self._initial_solutions`` is set, we
+        return ``self._initial_solutions``. If ``self._initial_solutions`` is
+        not set, we draw from Gaussian distribution centered at ``self.x0``
+        with standard deviation ``self.sigma``. Otherwise, each solution is
+        drawn from a distribution centered at a randomly chosen elite with
+        standard deviation ``self.sigma``.
 
         Returns:
-            ``(batch_size, solution_dim)`` array -- contains ``batch_size`` new
-            solutions to evaluate.
+            If the archive is not empty, ``(batch_size, solution_dim)`` array
+            -- contains ``batch_size`` new solutions to evaluate. If the
+            archive is empty, we return ``self._initial_solutions``, which
+            might not have ``batch_size`` solutions.
         """
         if self.archive.empty:
-            sigma = self._sigma0
-            parents = np.expand_dims(self._x0, axis=0)
+            if self._initial_solutions is not None:
+                return np.clip(self._initial_solutions, self.lower_bounds,
+                               self.upper_bounds)
+            parents = np.repeat(self.x0[None], repeats=self._batch_size, axis=0)
         else:
-            sigma = self._sigma
-            parents = self.archive.sample_elites(
-                self._batch_size).solution_batch
+            parents = self.archive.sample_elites(self._batch_size)["solution"]
 
-        noise = self._rng.normal(
-            scale=sigma,
-            size=(self._batch_size, self.solution_dim),
-        ).astype(self.archive.dtype)
-
-        return self._ask_clip_helper(parents, noise, self.lower_bounds,
-                                     self.upper_bounds)
+        return self._operator.ask(parents=parents)

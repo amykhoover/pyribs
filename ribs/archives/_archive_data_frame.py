@@ -1,8 +1,7 @@
 """Provides ArchiveDataFrame."""
-import numpy as np
-import pandas as pd
+import re
 
-from ribs.archives._elite import Elite
+import pandas as pd
 
 # Developer Notes:
 # - The documentation for this class is hacked -- to add new methods, manually
@@ -22,41 +21,40 @@ class ArchiveDataFrame(pd.DataFrame):
 
     Example:
 
-        This object is created by :meth:`~ArchiveBase.as_pandas` (i.e. users
+        This object is created by :meth:`~ArchiveBase.data` (i.e. users
         typically do not create it on their own)::
 
-            df = archive.as_pandas()
+            df = archive.data(..., return_type="pandas")
 
-        To iterate through every :class:`Elite`, use::
+        To iterate through every elite as a dict, use::
 
             for elite in df.iterelites():
-                elite.sol
-                elite.obj
+                elite["solution"]  # Shape: (solution_dim,)
+                elite["objective"]
                 ...
 
-        There are also methods to access the solutions, objectives, etc. of
-        all elites in the archive. For instance, the following is an array
-        where entry ``i`` contains the behavior values of the ``i``'th elite in
-        the DataFrame::
+        Arrays corresponding to individual fields can be accessed with
+        :meth:`get_field`. For instance, the following is an array where entry
+        ``i`` contains the measures of the ``i``'th elite in the DataFrame::
 
-            df.batch_behaviors()
+            df.get_field("measures")
 
     .. warning::
 
-        Accessing ``batch`` methods (e.g. :meth:`batch_behaviors`) always
-        creates a copy, so the following will copy the behaviors 3 times::
+        Calling :meth:`get_field` always creates a copy, so the following will
+        copy the measures 3 times::
 
-            df.batch_behaviors()[0]
-            df.batch_behaviors().mean()
-            df.batch_behaviors().median()
+            df.get_field("measures")[0]
+            df.get_field("measures").mean()
+            df.get_field("measures").median()
 
         **Thus, if you need to use the method several times, we recommend
         storing it first, like so**::
 
-            behaviors = df.batch_behaviors()
-            behaviors[0]
-            behaviors.mean()
-            behaviors.median()
+            measures = df.get_field("measures")
+            measures[0]
+            measures.mean()
+            measures.median()
 
     .. note::
 
@@ -69,10 +67,9 @@ class ArchiveDataFrame(pd.DataFrame):
 
     .. note::
 
-        All the ``batch`` methods "align" with each other -- i.e.
-        ``batch_behaviors()[i]`` corresponds to ``batch_indices()[i]``,
-        ``batch_metadata()[i]``, ``batch_objectives()[i]``, and
-        ``batch_solutions()[i]``.
+        Results of :meth:`get_field` "align" with each other -- e.g.
+        ``get_field("measures")[i]`` corresponds to ``get_field("index")[i]``,
+        ``get_field("objective")[i]``, and ``get_field("solution")[i]``.
     """
 
     def __init__(self, *args, **kwargs):
@@ -83,85 +80,55 @@ class ArchiveDataFrame(pd.DataFrame):
         return ArchiveDataFrame
 
     def iterelites(self):
-        """Iterator which outputs every :class:`Elite` in the ArchiveDataFrame.
-
-        Data which is unavailable will be turned into None. For example, if
-        there are no solution columns, then ``elite.sol`` will be None.
+        """Iterator that outputs every elite in the ArchiveDataFrame as a dict.
         """
-        batch_solutions = self.batch_solutions()
-        batch_objectives = self.batch_objectives()
-        batch_behaviors = self.batch_behaviors()
-        batch_indices = self.batch_indices()
-        batch_metadata = self.batch_metadata()
+        # Identify fields in the data frame. There are some edge cases here,
+        # such as if someone purposely names their field with an underscore and
+        # a number at the end like "foobar_0", but it covers most cases.
+        fields = {}
+        for col in self:
+            split = col.split("_")
+            if len(split) == 1:
+                # Single column.
+                fields[col] = None
+            elif split[-1].isdigit():
+                # If the last item in the split is numerical, this should match
+                # vector fields like "measures_0".
 
-        none_array = np.empty(len(self), dtype=object)
+                # Exclude last val and underscore - note negative sign.
+                field_name = col[:-(len(split[-1]) + 1)]
+
+                fields[field_name] = None
+            else:
+                fields[col] = None
+
+        # Retrieve field data.
+        for name in fields:
+            fields[name] = self.get_field(name)
+
+        n_elites = len(self)
 
         return map(
-            lambda e: Elite(e[0], e[1], e[2], e[3], e[4]),
-            zip(
-                none_array if batch_solutions is None else batch_solutions,
-                none_array if batch_objectives is None else batch_objectives,
-                none_array if batch_behaviors is None else batch_behaviors,
-                none_array if batch_indices is None else batch_indices,
-                none_array if batch_metadata is None else batch_metadata,
-            ),
+            lambda i: {
+                name: arr[i] for name, arr in fields.items()
+            },
+            range(n_elites),
         )
 
-    # Note: The slices for batch methods cannot be pre-computed because the
-    # DataFrame columns might change in-place, e.g. when a column is deleted.
+    def get_field(self, field):
+        """Array holding the data for the given field.
 
-    def batch_behaviors(self):
-        """Array with behavior values of all elites.
-
-        None if there are no behavior values in the ``ArchiveDataFrame``.
-
-        Returns:
-            (n, behavior_dim) numpy.ndarray: See above.
+        None if there is no data for the field.
         """
-        cols = [c for c in self if c.startswith("behavior_")]
-        return self[cols].to_numpy(copy=True) if cols else None
+        # Note: The column names cannot be pre-computed because the DataFrame
+        # columns might change in-place, e.g., when a column is deleted.
 
-    def batch_indices(self):
-        """Array with indices of all elites.
-
-        None if there are no indices in the ``ArchiveDataFrame``.
-
-        Returns:
-            (n,) numpy.ndarray: See above.
-        """
-        return self["index"].to_numpy(copy=True) if "index" in self else None
-
-    def batch_metadata(self):
-        """Array with metadata of all elites.
-
-        None if there is no metadata (e.g. if ``include_metadata=False`` in
-        :meth:`~ArchiveBase.as_pandas`).
-
-        Returns:
-            (n,) numpy.ndarray: See above.
-        """
-        return self["metadata"].to_numpy(
-            copy=True) if "metadata" in self else None
-
-    def batch_objectives(self):
-        """Array with objective values of all elites.
-
-        None if there are no objectives in the ``ArchiveDataFrame``.
-
-        Returns:
-            (n,) numpy.ndarray: See above.
-        """
-        return self["objective"].to_numpy(
-            copy=True) if "objective" in self else None
-
-    def batch_solutions(self):
-        """Array with solutions of all elites.
-
-        None if there are no solutions (e.g. if ``include_solutions=False`` in
-        :meth:`~ArchiveBase.as_pandas`).
-
-        Returns:
-            (n, solution_dim) numpy.ndarray: See above.
-        """
-        cols = [c for c in self if c.startswith("solution_")]
-        return self[cols].to_numpy(copy=True) if cols else None
+        if field in self:
+            # Scalar field -- e.g., "objective"
+            return self[field].to_numpy(copy=True)
+        else:
+            # Vector field -- e.g., field="measures" and we want columns like
+            # "measures_0" and "measures_1"
+            field_re = f"{field}_\\d+"
+            cols = [c for c in self if re.fullmatch(field_re, c)]
+            return self[cols].to_numpy(copy=True) if cols else None

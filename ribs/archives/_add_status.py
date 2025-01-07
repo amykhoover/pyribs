@@ -16,10 +16,12 @@ class AddStatus(IntEnum):
 
     Example:
 
-        Check the status of an add operation as follows::
+        Check the status of an add operation as follows (note that these
+        examples use :meth:`~ArchiveBase.add_single` rather than
+        :meth:`~ArchiveBase.add`)::
 
             from ribs.archives import AddStatus
-            status, _ = archive.add(solution, objective_value, behavior_values)
+            status, _ = archive.add_single(solution, objective, measures)
             if status == AddStatus.NEW:
                 # Do something if the solution made a new elite in the archive.
 
@@ -27,7 +29,7 @@ class AddStatus(IntEnum):
         act like a bool::
 
             from ribs.archives import AddStatus
-            status, _ = archive.add(solution, objective_value, behavior_values)
+            status, _ = archive.add_single(solution, objective, measures)
             if status:
                 # Do something if the solution was added to the archive.
 

@@ -1,30 +1,11 @@
 # Contributing
 
-Contributions are welcome, and they are greatly appreciated. Every little bit
-helps, and credit will always be given.
-
-## Types of Contributions
-
-- **Report Bugs:** Refer to the
-  [Issue Tracker](https://github.com/icaros-usc/pyribs/issues). Please include
-  details such as operating system, Python version, and ribs version, as well as
-  detailed steps to reproduce the bug.
-- **Fix Bugs:** Look through the Issue Tracker for bugs. Anything tagged with
-  "bug" and "help wanted" is open to whoever wants to implement it.
-- **Propose features:** To request new features in pyribs, submit a Feature
-  Request on the Issue Tracker. In the request, please:
-  - Explain in detail how the feature would work.
-  - Keep the scope as narrow as possible, to make the features easier to
-    implement.
-- **Implement Features:** Look through the Issue Tracker for features. Anything
-  tagged with "enhancement" and "help wanted" is open to whoever wants to
-  implement it.
-- **Write Documentation:** pyribs could always use more documentation, whether
-  as part of the official pyribs docs, in docstrings, or even on the web in blog
-  posts, articles, and such. For the website, refer to the
-  [website repo](https://github.com/icaros-usc/pyribs.org).
-- **Submit Feedback:** The best way to send feedback is to file an issue on the
-  [Issue Tracker](https://github.com/icaros-usc/pyribs/issues).
+Contributions are welcome and are greatly appreciated! Every little bit helps.
+Contributions include reporting/fixing bugs, proposing/implementing features
+(see our [Issue Tracker](https://github.com/icaros-usc/pyribs/issues)), writing
+documentation in the codebase or on our
+[website repo](https://github.com/icaros-usc/pyribs.org), and submitting
+feedback.
 
 ## Developing pyribs
 
@@ -41,34 +22,47 @@ Ready to contribute? Here's how to set up pyribs for local development.
    git clone https://github.com/USERNAME/pyribs.git
    ```
 
-1. Install the local copy and dev requirements into an environment. For
-   instance, with Conda, the following creates an environment at `./env`.
-
-   ```bash
-   cd pyribs
-   conda create --prefix ./env python=3.7 # 3.7 is the minimum version pyribs supports.
-   conda activate ./env
-   pip install -e .[dev]
-   ```
-
 1. Create a branch for local development:
 
    ```bash
    git checkout -b name-of-bugfix-or-feature
    ```
 
-   Now make the appropriate changes locally.
+1. Install the local copy and dev requirements into a virtual environment. For
+   instance, with Conda, the following creates an environment at `./env`.
 
-   - Please follow the
-     [Google Style Guide](https://google.github.io/styleguide/pyguide.html)
-     (particularly when writing docstrings).
-   - Make sure to auto-format the code using YAPF. We highly recommend
-     installing an editor plugin that auto-formats on save, but YAPF also runs
-     on the command line:
+   ```bash
+   cd pyribs
+   conda create --prefix ./env python=3.8  # 3.8 is the minimum version pyribs supports.
+   conda activate ./env
+   pip install -e .[all,dev]  # `all` contains dependencies for all extras of pyribs.
+                              # `dev` contains development dependencies.
+   ```
 
-     ```bash
-     yapf -i FILES
-     ```
+1. We roughly follow the
+   [Google Style Guide](https://google.github.io/styleguide/pyguide.html) in our
+   codebase by using yapf, isort, and pylint to enforce code format and style.
+   To automatically check for formatting and style every time you commit, we use
+   [pre-commit](https://pre-commit.com). Pre-commit should have already been
+   installed with `.[dev]` above. To set it up, run:
+
+   ```bash
+   pre-commit install
+   ```
+
+1. Now make the appropriate changes locally. If relevant, make sure to write
+   tests for your code in the `tests/` folder.
+
+1. Auto-format and lint your code using YAPF, isort, and pylint. Note that
+   pre-commit will automatically run these whenever you commit your code; you
+   can also run them with `pre-commit run`. You can also run these commands on
+   the command line:
+
+   ```bash
+   yapf -i FILES
+   isort FILES
+   pylint FILES
+   ```
 
 1. After making changes, check that the changes pass the tests:
 
@@ -84,16 +78,6 @@ Ready to contribute? Here's how to set up pyribs for local development.
    make benchmark # ^ same as above
    ```
 
-   Finally, to lint the code:
-
-   ```bash
-   pylint ribs tests benchmarks examples
-   make lint # ^ same as above
-   ```
-
-   To get pytest and pylint, pip install them into the environment. However,
-   they should already install with `pip install -e .[dev]`.
-
 1. Add your change to the changelog for the current version in `HISTORY.md`.
 
 1. Commit the changes and push the branch to GitHub:
@@ -104,21 +88,7 @@ Ready to contribute? Here's how to set up pyribs for local development.
    git push origin name-of-bugfix-or-feature
    ```
 
-1. Submit a pull request through the GitHub website.
-
-## Pull Request Guidelines
-
-Before submitting a pull request, check that it meets these guidelines:
-
-1. Style: Code should follow the
-   [Google Style Guide](https://google.github.io/styleguide/pyguide.html) and be
-   auto-formatted with [YAPF](https://github.com/google/yapf).
-1. The pull request should include tests.
-1. If the pull request adds functionality, corresponding docstrings and other
-   documentation should be updated.
-1. The pull request should work for Python 3.7 and higher. GitHub Actions will
-   display test results at the bottom of the pull request page. Check there for
-   test results.
+1. Submit a pull request through the GitHub web interface.
 
 ## Instructions
 
@@ -146,25 +116,39 @@ to the docs.
 
 ### Adding a Tutorial
 
-Tutorials are created in Jupyter notebooks that are stored under
-`examples/tutorials` in the repo. To create a tutorial:
+Tutorials are created in Jupyter notebooks that are stored under `tutorials/` in
+the repo. To create a tutorial:
 
-1. Write the notebook and save it under `examples/tutorials`.
+1. Write the notebook and save it under `tutorials/`. Notebooks may also be
+   saved in a subdirectory of `tutorials/`, e.g., `tutorials/features`.
 1. Use cell magic (e.g. `%pip install ribs`) to install pyribs and other
    dependencies.
    - Installation cells tend to produce a lot of output. Make sure to clear this
      output in Jupyter lab so that it does not clutter the documentation.
+   - Choose your ribs extra carefully -- in particular, if you use
+     `ribs.visualize` in the tutorial, make sure to use
+     `%pip install ribs[visualize]`.
 1. Before the main loop of the QD algorithm, include a line like
    `total_itrs = 500` (any other integer will work). This line will be replaced
    during testing (see `tests/tutorials.sh`) in order to test that the notebook
    runs end-to-end. By default, the tests run the notebook with
    `total_itrs = 5`. If this tutorial needs more (or less), modify the
-   switch-case statement in `tests/tutorials.sh`.
+   switch-case statement in `tests/tutorials.sh`. The name `TOTAL_ITRS` can also
+   be used.
 1. Make sure that the only level 1 heading (e.g. `# Awesome Tutorial`) is the
    title at the top of the notebook. Subsequent titles should be level 2 (e.g.
    `## Level 2 Heading`) or higher.
-1. Add an entry into the toctree and table in `docs/tutorials.md`.
+1. If linking to the pyribs documentation, make sure to link to pages in the
+   `latest` version on ReadTheDocs, i.e. your links should start with
+   `https://docs.pyribs.org/en/latest/`. Note that we do not use Sphinx autodoc
+   (e.g., `:class:`) in the tutorials because such links do not work outside the
+   pyribs website (e.g., on Google Colab).
+1. Add an entry into the toctree in `docs/tutorials.md` and add it to one of the
+   lists of tutorials.
 1. Check that the tutorial shows up on the Tutorials page when serving the docs.
+1. If the tutorial should be excluded from testing (e.g., because it takes too
+   long to run), add it to the list of excluded tutorials in
+   `tests/tutorials_list.sh`.
 1. Create a PR into the website repo that adds the tutorial onto the home page,
    specifically
    [this file](https://github.com/icaros-usc/pyribs.org/blob/master/src/index.liquid).
@@ -176,11 +160,12 @@ Examples are created in Python scripts stored under `examples/` in the repo, and
 their source is shown in the docs. To create an example:
 
 1. Write the Python script and save it under `examples/`.
+1. Add any dependencies at the top of the script with a `pip install` command
+   (see existing examples for a sample of how to do this).
 1. Add a shell command to `tests/examples.sh` that calls the script with
-   parameters that will make it run as quickly as possible. In the future, this
-   will help us ensure that the script has basic correctness.
-1. Add any dependencies needed to run the example into the `examples` extra in
-   `setup.py` (under `extras_require`).
+   parameters that will make it run as quickly as possible. This helps us ensure
+   that the script has basic correctness. Also call the `install_deps` function
+   on the script file before running the script.
 1. Add a Markdown file in the `docs/examples` directory with the same name as
    the Python file -- if the example is `examples/foobar.py`, the Markdown file
    will be `docs/examples/foobar.md`.
@@ -198,44 +183,84 @@ their source is shown in the docs. To create an example:
    ```
    ````
 1. Add any other relevant info to the Markdown file.
-1. Add an entry into the toctree and table in `docs/examples.md`.
+1. Add an entry into the toctree and list of examples in `docs/examples.md`.
 1. Check that the example shows up on the Examples page when serving the docs.
 
 ### Referencing Papers
 
 When referencing papers, refer to them as `Lastname YEAR`, e.g. `Smith 2004`.
-Also, prefer to link to the paper's website, rather than just the PDF. This is
-particularly relevant when linking to arXiv papers.
+Also, prefer to link to the paper's website, rather than just the PDF.
 
 ### Deploying
 
+We roughly follow the trunk-based release model described
+[here](https://trunkbaseddevelopment.com/branch-for-release/). Namely, we create
+release branches for minor versions (e.g., `release/0.6.x`) from our trunk
+(`master` branch). For patch releases, e.g., `0.6.2`, we cherry pick bug fixes
+from `master` into the corresponding release branch.
+
+#### Minor Versions
+
+1. Check that the latest version of the docs is building on Read the Docs.
 1. Create a PR into master after doing the following:
-   1. Update the version with `bump2version` by running the following for minor
-      versions:
+   1. Update the version with `bump2version`:
       ```bash
       bump2version minor
       ```
-      or the following for patch versions:
-      ```bash
-      bump2version patch
-      ```
    1. Add all necessary info on the version to `HISTORY.md`.
-1. (Optional) Once the PR has passed CI/CD and been squashed-and-merged into
-   master, check out the squash commit and locally run `make release-test`. This
-   uploads the code to TestPyPI to check that the deployment works. If this
-   fails, make fixes as appropriate.
-1. Once the PR in step 1 and any changes in step 2 have passed CI/CD and been
-   squashed-and-merged into master, locally tag the master branch with a tag
-   like `v0.2.1`, e.g.
+1. Once the PR above has been merged, create a release branch from master called
+   `release/0.<NUM>.x`, e.g., `release/0.6.x`.
+1. On the release branch, switch tutorial links from latest to stable with:
    ```bash
-   git tag v0.2.1 HEAD
+   make tutorial_links
+   ```
+   See [#300](https://github.com/icaros-usc/pyribs/pull/300) for why we do this.
+1. (Optional) On the release branch, run `make release-test`. This uploads the
+   code to TestPyPI to check that the deployment works. If this fails, make
+   fixes as appropriate.
+1. Locally tag the head of the release branch, e.g.,
+   ```bash
+   git tag v0.6.0 HEAD
    ```
 1. Now push the tag with
    ```bash
    git push --tags
    ```
-1. Check that the version was deployed to PyPI. If it failed, delete the tag,
-   make appropriate fixes, and repeat steps 2 and 3.
+1. Check that the version was deployed to PyPI. If it failed, delete the tag and
+   make appropriate fixes on master. Then, cherry pick the fixes into the
+   release branch. Finally, tag the HEAD again and push the tag.
 1. Write up the release on GitHub, and attach it to the tag.
 
-Our deployment process may change in the future as pyribs becomes more complex.
+#### Patch Versions
+
+1. Check that the latest version of the docs is building on Read the Docs.
+1. Create a PR into master after doing the following:
+   1. Update the version with `bump2version`:
+      ```bash
+      bump2version patch
+      ```
+   1. Add all necessary info on the version to `HISTORY.md`.
+1. Once the PR above has been merged, checkout the release branch for the
+   corresponding minor version, e.g., for `0.6.2`, check out `release/0.6.x`.
+1. On the release branch, cherry-pick the commit for the PR you just created.
+   Also cherry pick any other bug fixes which need to be released in this patch.
+1. On the release branch, edit `HISTORY.md` to remove any irrelevant history,
+   e.g., if there are upcoming changes that will be included only in the next
+   version.
+1. If any tutorials were added in this release, run `make tutorial_links` to
+   make the links point to the stable version of pyribs.
+1. (Optional) On the release branch, run `make release-test`. This uploads the
+   code to TestPyPI to check that the deployment works. If this fails, make
+   fixes as appropriate.
+1. Locally tag the head of the release branch, e.g.,
+   ```bash
+   git tag v0.6.2 HEAD
+   ```
+1. Now push the tag with
+   ```bash
+   git push --tags
+   ```
+1. Check that the version was deployed to PyPI. If it failed, delete the tag and
+   make appropriate fixes on master. Then, cherry pick the fixes into the
+   release branch. Finally, tag the HEAD again and push the tag.
+1. Write up the release on GitHub, and attach it to the tag.

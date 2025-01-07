@@ -7,15 +7,12 @@ examples/sphere
 examples/lunar_lander
 ```
 
-Examples assume some experience with pyribs and provide commented source code
-with fewer explanations than tutorials. If running locally, install dependencies
-with:
+These examples provide single Python files with fewer explanations than
+tutorials. To run each example, first install the dependencies listed at the top
+of each file, then follow the usage instructions. Here are the current examples:
 
-```bash
-pip install ribs[examples]
-```
-
-| Name                         | Archive                             | Emitter                                    | Optimizer                           |
-| ---------------------------- | ----------------------------------- | ------------------------------------------ | ----------------------------------- |
-| {doc}`examples/sphere`       | (several)                           | (several)                                  | {class}`~ribs.optimizers.Optimizer` |
-| {doc}`examples/lunar_lander` | {class}`~ribs.archives.GridArchive` | {class}`~ribs.emitters.ImprovementEmitter` | {class}`~ribs.optimizers.Optimizer` |
+- {doc}`examples/sphere`: Demonstrates how to set up recent QD algorithms and
+  apply them to the sphere benchmark function.
+- {doc}`examples/lunar_lander`: An extended version of the
+  [Lunar Lander tutorial](tutorials/lunar_lander) which distributes evaluations
+  with Dask and adds other features such as a command-line interface.

@@ -1,4 +1,5 @@
 ```{include} readme.md
+
 ```
 
 ```{toctree}
@@ -8,6 +9,7 @@
 
 tutorials
 examples
+whats-new
 ```
 
 ```{toctree}
@@ -17,8 +19,10 @@ examples
 
 api/ribs.archives
 api/ribs.emitters
-api/ribs.optimizers
-api/ribs.factory
+api/ribs.emitters.operators
+api/ribs.emitters.opt
+api/ribs.emitters.rankers
+api/ribs.schedulers
 api/ribs.visualize
 ```
 
@@ -27,7 +31,7 @@ api/ribs.visualize
 :caption: Reference
 :hidden:
 
-contributing
+CONTRIBUTING
 history
 genindex
 ```

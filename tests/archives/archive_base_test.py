@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from ribs.archives import GridArchive
+from ribs.archives import GridArchive, ProximityArchive
 
 from .conftest import ARCHIVE_NAMES, get_archive_data
 
@@ -19,7 +19,28 @@ from .conftest import ARCHIVE_NAMES, get_archive_data
 def test_str_dtype_float(name, dtype):
     str_dtype, np_dtype = dtype
     archive = get_archive_data(name, str_dtype).archive
-    assert archive.dtype == np_dtype
+    assert archive.dtypes["solution"] == np_dtype
+    assert archive.dtypes["objective"] == np_dtype
+    assert archive.dtypes["measures"] == np_dtype
+    assert archive.dtypes["threshold"] == np_dtype
+
+
+def test_dict_dtype():
+    archive = GridArchive(
+        solution_dim=3,
+        dims=[10, 10],
+        ranges=[(-1, 1), (-2, 2)],
+        dtype={
+            "solution": object,
+            "objective": np.float32,
+            "measures": np.float32,
+        },
+    )
+
+    assert archive.dtypes["solution"] == object
+    assert archive.dtypes["objective"] == np.float32
+    assert archive.dtypes["measures"] == np.float32
+    assert archive.dtypes["threshold"] == np.float32
 
 
 def test_invalid_dtype():
@@ -30,6 +51,20 @@ def test_invalid_dtype():
                     dtype=np.int32)
 
 
+def test_invalid_dict_dtype():
+    with pytest.raises(ValueError):
+        GridArchive(
+            solution_dim=3,
+            dims=[10, 10],
+            ranges=[(-1, 1), (-2, 2)],
+            dtype={
+                "solution": object,
+                "objective": np.float32,
+                # Missing measures.
+            },
+        )
+
+
 #
 # Tests for iteration -- only GridArchive for simplicity.
 #
@@ -38,23 +73,27 @@ def test_invalid_dtype():
 def test_iteration():
     data = get_archive_data("GridArchive")
     for elite in data.archive_with_elite:
-        assert np.isclose(elite.solution, data.solution).all()
-        assert np.isclose(elite.objective, data.objective_value)
-        assert np.isclose(elite.measures, data.behavior_values).all()
-        # TODO: Avoid having to manually ravel.
-        assert elite.index == np.ravel_multi_index(data.grid_indices,
-                                                   data.archive_with_elite.dims)
-        assert elite.metadata == data.metadata
+        assert np.isclose(elite["solution"], data.solution).all()
+        assert np.isclose(elite["objective"], data.objective)
+        assert np.isclose(elite["measures"], data.measures).all()
+        assert elite["index"] == data.archive_with_elite.grid_to_int_index(
+            [data.grid_indices])[0]
 
 
-def test_add_during_iteration():
+def test_add_during_iteration(add_mode):
     # Even with just one entry, adding during iteration should still raise an
     # error, just like it does in set.
     data = get_archive_data("GridArchive")
     with pytest.raises(RuntimeError):
         for _ in data.archive_with_elite:
-            data.archive_with_elite.add(data.solution, data.objective_value + 1,
-                                        data.behavior_values)
+            if add_mode == "single":
+                data.archive_with_elite.add_single(data.solution,
+                                                   data.objective + 1,
+                                                   data.measures)
+            else:
+                data.archive_with_elite.add([data.solution],
+                                            [data.objective + 1],
+                                            [data.measures])
 
 
 def test_clear_during_iteration():
@@ -64,17 +103,23 @@ def test_clear_during_iteration():
             data.archive_with_elite.clear()
 
 
-def test_clear_and_add_during_iteration():
+def test_clear_and_add_during_iteration(add_mode):
     data = get_archive_data("GridArchive")
     with pytest.raises(RuntimeError):
         for _ in data.archive_with_elite:
             data.archive_with_elite.clear()
-            data.archive_with_elite.add(data.solution, data.objective_value + 1,
-                                        data.behavior_values)
+            if add_mode == "single":
+                data.archive_with_elite.add_single(data.solution,
+                                                   data.objective + 1,
+                                                   data.measures)
+            else:
+                data.archive_with_elite.add([data.solution],
+                                            [data.objective + 1],
+                                            [data.measures])
 
 
 #
-# Statistics tests -- just GridArchive for simplicity.
+# Statistics and best elite tests -- just GridArchive for simplicity.
 #
 
 
@@ -85,39 +130,171 @@ def test_stats_dtype(dtype):
     assert isinstance(data.archive_with_elite.stats.num_elites, int)
     assert isinstance(data.archive_with_elite.stats.coverage, dtype)
     assert isinstance(data.archive_with_elite.stats.qd_score, dtype)
+    assert isinstance(data.archive_with_elite.stats.norm_qd_score, dtype)
     assert isinstance(data.archive_with_elite.stats.obj_max, dtype)
     assert isinstance(data.archive_with_elite.stats.obj_mean, dtype)
 
 
-def test_stats_multiple_add():
+@pytest.mark.parametrize("qd_score_offset", [0.0, -1.0])
+def test_stats_multiple_add(add_mode, qd_score_offset):
     archive = GridArchive(solution_dim=3,
                           dims=[10, 20],
-                          ranges=[(-1, 1), (-2, 2)])
-    archive.add([1, 2, 3], 1.0, [0, 0])
-    archive.add([1, 2, 3], 2.0, [0.25, 0.25])
-    archive.add([1, 2, 3], 3.0, [-0.25, -0.25])
+                          ranges=[(-1, 1), (-2, 2)],
+                          qd_score_offset=qd_score_offset)
+    if add_mode == "single":
+        archive.add_single([1, 2, 3], 1.0, [0, 0])
+        archive.add_single([1, 2, 3], 2.0, [0.25, 0.25])
+        archive.add_single([1, 2, 3], 3.0, [-0.25, -0.25])
+    else:
+        solution_batch = [[1, 2, 3]] * 3
+        objective_batch = [1.0, 2.0, 3.0]
+        measures_batch = [[0, 0], [0.25, 0.25], [-0.25, -0.25]]
+        archive.add(solution_batch, objective_batch, measures_batch)
 
     assert archive.stats.num_elites == 3
     assert np.isclose(archive.stats.coverage, 3 / 200)
-    assert np.isclose(archive.stats.qd_score, 6.0)
+    if qd_score_offset == 0.0:
+        assert np.isclose(archive.stats.qd_score, 6.0)
+        assert np.isclose(archive.stats.norm_qd_score, 6.0 / 200)
+    else:
+        # -1 is subtracted from every objective.
+        assert np.isclose(archive.stats.qd_score, 9.0)
+        assert np.isclose(archive.stats.norm_qd_score, 9.0 / 200)
     assert np.isclose(archive.stats.obj_max, 3.0)
     assert np.isclose(archive.stats.obj_mean, 2.0)
 
 
-def test_stats_add_and_overwrite():
+@pytest.mark.parametrize("qd_score_offset", [0.0, -1.0])
+def test_stats_add_and_overwrite(add_mode, qd_score_offset):
     archive = GridArchive(solution_dim=3,
                           dims=[10, 20],
-                          ranges=[(-1, 1), (-2, 2)])
-    archive.add([1, 2, 3], 1.0, [0, 0])
-    archive.add([1, 2, 3], 2.0, [0.25, 0.25])
-    archive.add([1, 2, 3], 3.0, [-0.25, -0.25])
-    archive.add([1, 2, 3], 5.0, [0.25, 0.25])  # Overwrites the second add().
+                          ranges=[(-1, 1), (-2, 2)],
+                          qd_score_offset=qd_score_offset)
+    if add_mode == "single":
+        archive.add_single([1, 2, 3], 1.0, [0, 0])
+        archive.add_single([1, 2, 3], 2.0, [0.25, 0.25])
+        archive.add_single([1, 2, 3], 3.0, [-0.25, -0.25])
+        archive.add_single([1, 2, 3], 5.0,
+                           [0.25, 0.25])  # Overwrites the second add.
+    else:
+        solution_batch = [[1, 2, 3]] * 4
+        objective_batch = [1.0, 2.0, 3.0, 5.0]
+        measures_batch = [[0, 0], [0.25, 0.25], [-0.25, -0.25], [0.25, 0.25]]
+        archive.add(solution_batch, objective_batch, measures_batch)
 
     assert archive.stats.num_elites == 3
     assert np.isclose(archive.stats.coverage, 3 / 200)
-    assert np.isclose(archive.stats.qd_score, 9.0)
+    if qd_score_offset == 0.0:
+        assert np.isclose(archive.stats.qd_score, 9.0)
+        assert np.isclose(archive.stats.norm_qd_score, 9.0 / 200)
+    else:
+        # -1 is subtracted from every objective.
+        assert np.isclose(archive.stats.qd_score, 12.0)
+        assert np.isclose(archive.stats.norm_qd_score, 12.0 / 200)
     assert np.isclose(archive.stats.obj_max, 5.0)
     assert np.isclose(archive.stats.obj_mean, 3.0)
+
+
+def test_best_elite(add_mode):
+    archive = GridArchive(solution_dim=3,
+                          dims=[10, 20],
+                          ranges=[(-1, 1), (-2, 2)])
+
+    # Initial elite is None.
+    assert archive.best_elite is None
+
+    # Add an elite.
+    if add_mode == "single":
+        archive.add_single([1, 2, 3], 1.0, [0, 0])
+    else:
+        archive.add([[1, 2, 3]], [1.0], [[0, 0]])
+
+    assert archive.best_elite.keys() == {
+        "solution", "objective", "measures", "threshold", "index"
+    }
+
+    assert archive.best_elite["solution"].shape == (3,)
+    assert archive.best_elite["objective"].shape == ()
+    assert archive.best_elite["measures"].shape == (2,)
+    assert archive.best_elite["threshold"].shape == ()
+    # Seem to be spurious pylint warnings.
+    # pylint: disable-next=use-implicit-booleaness-not-comparison,comparison-with-callable
+    assert archive.stats.obj_max.shape == ()
+
+    assert np.isclose(archive.best_elite["solution"], [1, 2, 3]).all()
+    assert np.isclose(archive.best_elite["objective"], 1.0)
+    assert np.isclose(archive.best_elite["measures"], [0, 0]).all()
+    assert np.isclose(archive.best_elite["threshold"], 1.0).all()
+    assert np.isclose(archive.stats.obj_max, 1.0)
+
+    # Add an elite into the same cell as the previous elite -- best_elite should
+    # now be overwritten.
+    if add_mode == "single":
+        archive.add_single([4, 5, 6], 2.0, [0, 0])
+    else:
+        archive.add([[4, 5, 6]], [2.0], [[0, 0]])
+
+    assert np.isclose(archive.best_elite["solution"], [4, 5, 6]).all()
+    assert np.isclose(archive.best_elite["objective"], 2.0).all()
+    assert np.isclose(archive.best_elite["measures"], [0, 0]).all()
+    assert np.isclose(archive.best_elite["threshold"], 2.0).all()
+    assert np.isclose(archive.stats.obj_max, 2.0)
+
+
+def test_best_elite_with_threshold(add_mode):
+    archive = GridArchive(solution_dim=3,
+                          dims=[10, 20],
+                          ranges=[(-1, 1), (-2, 2)],
+                          learning_rate=0.1,
+                          threshold_min=0.0)
+
+    # Add an elite.
+    if add_mode == "single":
+        archive.add_single([1, 2, 3], 1.0, [0, 0])
+    else:
+        archive.add([[1, 2, 3]], [1.0], [[0, 0]])
+
+    # Threshold should now be 0.1 * 1 + (1 - 0.1) * 0.
+
+    assert np.isclose(archive.best_elite["solution"], [1, 2, 3]).all()
+    assert np.isclose(archive.best_elite["objective"], 1.0).all()
+    assert np.isclose(archive.best_elite["measures"], [0, 0]).all()
+    assert np.isclose(archive.stats.obj_max, 1.0)
+
+    # Add an elite with lower objective value than best elite but higher
+    # objective value than threshold.
+    if add_mode == "single":
+        archive.add_single([4, 5, 6], 0.2, [0, 0])
+    else:
+        archive.add([[4, 5, 6]], [0.2], [[0, 0]])
+
+    # Best elite remains the same even though this is a non-elitist archive and
+    # the best elite is no longer in the archive.
+    assert np.isclose(archive.best_elite["solution"], [1, 2, 3]).all()
+    assert np.isclose(archive.best_elite["objective"], 1.0)
+    assert np.isclose(archive.best_elite["measures"], [0, 0]).all()
+    assert np.isclose(archive.stats.obj_max, 1.0)
+
+
+#
+# index_of() and index_of_single() tests
+#
+
+
+def test_index_of_wrong_shape(data):
+    with pytest.raises(ValueError):
+        data.archive.index_of([data.measures[:-1]])
+
+
+# Only test on GridArchive.
+def test_index_of_single():
+    data = get_archive_data("GridArchive")
+    assert data.archive.index_of_single(data.measures) == data.int_index
+
+
+def test_index_of_single_wrong_shape(data):
+    with pytest.raises(ValueError):
+        data.archive.index_of_single(data.measures[:-1])
 
 
 #
@@ -153,53 +330,136 @@ def test_cells_correct(data):
     assert data.archive.cells == data.cells
 
 
-def test_behavior_dim_correct(data):
-    assert data.archive.behavior_dim == len(data.behavior_values)
+def test_measure_dim_correct(data):
+    assert data.archive.measure_dim == len(data.measures)
 
 
 def test_solution_dim_correct(data):
     assert data.archive.solution_dim == len(data.solution)
 
 
+def test_learning_rate_correct(data):
+    assert data.archive.learning_rate == 1.0  # Default value.
+
+
+def test_threshold_min_correct(data):
+    assert data.archive.threshold_min == -np.inf  # Default value.
+
+
+def test_qd_score_offset_correct(data):
+    assert data.archive.qd_score_offset == 0.0  # Default value.
+
+
+def test_field_list_correct(data):
+    assert data.archive.field_list == [
+        "solution", "objective", "measures", "threshold"
+    ]
+
+
 def test_basic_stats(data):
     assert data.archive.stats.num_elites == 0
     assert data.archive.stats.coverage == 0.0
     assert data.archive.stats.qd_score == 0.0
+    assert data.archive.stats.norm_qd_score == 0.0
     assert data.archive.stats.obj_max is None
     assert data.archive.stats.obj_mean is None
 
     assert data.archive_with_elite.stats.num_elites == 1
-    assert data.archive_with_elite.stats.coverage == 1 / data.cells
-    assert data.archive_with_elite.stats.qd_score == data.objective_value
-    assert data.archive_with_elite.stats.obj_max == data.objective_value
-    assert data.archive_with_elite.stats.obj_mean == data.objective_value
+
+    if data.name == "ProximityArchive":
+        assert data.archive_with_elite.stats.coverage == 1.0
+        assert data.archive_with_elite.stats.norm_qd_score == data.objective
+    else:
+        assert data.archive_with_elite.stats.coverage == 1 / data.cells
+        assert (data.archive_with_elite.stats.norm_qd_score == data.objective /
+                data.cells)
+    assert data.archive_with_elite.stats.qd_score == data.objective
+    assert data.archive_with_elite.stats.obj_max == data.objective
+    assert data.archive_with_elite.stats.obj_mean == data.objective
 
 
-def test_elite_with_behavior_gets_correct_elite(data):
-    elite = data.archive_with_elite.elite_with_behavior(data.behavior_values)
-    assert np.all(elite.solution == data.solution)
-    assert elite.objective == data.objective_value
-    assert np.all(elite.measures == data.behavior_values)
-    # Avoid checking elite.idx since the meaning varies by archive.
-    assert elite.metadata == data.metadata
+def test_unstructured_stats_after_none_objective():
+    archive = ProximityArchive(solution_dim=3,
+                               measure_dim=2,
+                               k_neighbors=1,
+                               novelty_threshold=1.0)
+    archive.add_single([1, 2, 3], None, [0, 0])
+
+    assert archive.stats.coverage == 1.0
+    assert archive.stats.qd_score == 0.0
+    assert archive.stats.norm_qd_score == 0.0
+    assert archive.stats.obj_max == 0.0
+    assert archive.stats.obj_mean == 0.0
 
 
-def test_elite_with_behavior_returns_none(data):
-    elite = data.archive.elite_with_behavior(data.behavior_values)
-    assert elite.solution is None
-    assert elite.objective is None
-    assert elite.measures is None
-    assert elite.index is None
-    assert elite.metadata is None
+def test_retrieve_gets_correct_elite(data):
+    occupied, elites = data.archive_with_elite.retrieve([data.measures])
+    assert occupied[0]
+    assert np.all(elites["solution"][0] == data.solution)
+    assert elites["objective"][0] == data.objective
+    assert np.all(elites["measures"][0] == data.measures)
+    assert elites["threshold"][0] == data.objective
+    # Avoid checking elites["index"] since the meaning varies by archive.
+
+
+def test_retrieve_empty_values(data):
+    if data.name == "ProximityArchive":
+        # No solutions in the archive, so ProximityArchive cannot retrieve
+        # anything.
+        with pytest.raises(RuntimeError):
+            data.archive.retrieve([data.measures])
+    else:
+        occupied, elites = data.archive.retrieve([data.measures])
+        assert not occupied[0]
+        assert np.all(np.isnan(elites["solution"][0]))
+        assert np.isnan(elites["objective"])
+        assert np.all(np.isnan(elites["measures"][0]))
+        assert np.isnan(elites["threshold"])
+        assert elites["index"][0] == -1
+
+
+def test_retrieve_wrong_shape(data):
+    with pytest.raises(ValueError):
+        data.archive.retrieve([data.measures[:-1]])
+
+
+def test_retrieve_single_gets_correct_elite(data):
+    occupied, elite = data.archive_with_elite.retrieve_single(data.measures)
+    assert occupied
+    assert np.all(elite["solution"] == data.solution)
+    assert elite["objective"] == data.objective
+    assert np.all(elite["measures"] == data.measures)
+    assert elite["threshold"] == data.objective
+    # Avoid checking elite["index"] since the meaning varies by archive.
+
+
+def test_retrieve_single_empty_values(data):
+    if data.name == "ProximityArchive":
+        # No solutions in the archive, so ProximityArchive cannot retrieve
+        # anything.
+        with pytest.raises(RuntimeError):
+            data.archive.retrieve_single(data.measures)
+    else:
+        occupied, elite = data.archive.retrieve_single(data.measures)
+        assert not occupied
+        assert np.all(np.isnan(elite["solution"]))
+        assert np.isnan(elite["objective"])
+        assert np.all(np.isnan(elite["measures"]))
+        assert np.isnan(elite["threshold"])
+        assert elite["index"] == -1
+
+
+def test_retrieve_single_wrong_shape(data):
+    with pytest.raises(ValueError):
+        data.archive.retrieve_single(data.measures[:-1])
 
 
 def test_sample_elites_gets_single_elite(data):
-    elite_batch = data.archive_with_elite.sample_elites(2)
-    assert np.all(elite_batch.solution_batch == data.solution)
-    assert np.all(elite_batch.objective_batch == data.objective_value)
-    assert np.all(elite_batch.measures_batch == data.behavior_values)
-    # Avoid checking elite.idx since the meaning varies by archive.
-    assert np.all(elite_batch.metadata_batch == data.metadata)
+    elites = data.archive_with_elite.sample_elites(2)
+    assert np.all(elites["solution"] == data.solution)
+    assert np.all(elites["objective"] == data.objective)
+    assert np.all(elites["measures"] == data.measures)
+    # Avoid checking elite["index"] since the meaning varies by archive.
 
 
 def test_sample_elites_fails_when_empty(data):
@@ -209,36 +469,26 @@ def test_sample_elites_fails_when_empty(data):
 
 @pytest.mark.parametrize("name", ARCHIVE_NAMES)
 @pytest.mark.parametrize("with_elite", [True, False], ids=["nonempty", "empty"])
-@pytest.mark.parametrize("include_solutions", [True, False],
-                         ids=["solutions", "no_solutions"])
-@pytest.mark.parametrize("include_metadata", [True, False],
-                         ids=["metadata", "no_metadata"])
 @pytest.mark.parametrize("dtype", [np.float64, np.float32],
                          ids=["float64", "float32"])
-def test_as_pandas(name, with_elite, include_solutions, include_metadata,
-                   dtype):
+def test_pandas_data(name, with_elite, dtype):
     data = get_archive_data(name, dtype)
 
     # Set up expected columns and data types.
-    behavior_cols = [f"behavior_{i}" for i in range(len(data.behavior_values))]
-    expected_cols = ["index"] + behavior_cols + ["objective"]
-    expected_dtypes = [np.int32, *[dtype for _ in behavior_cols], dtype]
-    if include_solutions:
-        solution_cols = [f"solution_{i}" for i in range(len(data.solution))]
-        expected_cols += solution_cols
-        expected_dtypes += [dtype for _ in solution_cols]
-    if include_metadata:
-        expected_cols.append("metadata")
-        expected_dtypes.append(object)
+    solution_dim = len(data.solution)
+    measure_dim = len(data.measures)
+    expected_cols = ([f"solution_{i}" for i in range(solution_dim)] +
+                     ["objective"] +
+                     [f"measures_{i}" for i in range(measure_dim)] +
+                     ["threshold", "index"])
+    expected_dtypes = ([dtype for _ in range(solution_dim)] + [dtype] +
+                       [dtype for _ in range(measure_dim)] + [dtype, np.int32])
 
     # Retrieve the dataframe.
     if with_elite:
-        df = data.archive_with_elite.as_pandas(
-            include_solutions=include_solutions,
-            include_metadata=include_metadata)
+        df = data.archive_with_elite.data(return_type="pandas")
     else:
-        df = data.archive.as_pandas(include_solutions=include_solutions,
-                                    include_metadata=include_metadata)
+        df = data.archive.data(return_type="pandas")
 
     # Check columns and data types.
     assert (df.columns == expected_cols).all()
@@ -250,15 +500,15 @@ def test_as_pandas(name, with_elite, include_solutions, include_metadata,
             index = df.loc[0, "index"]
             assert (data.archive_with_elite.centroids[index] == data.centroid
                    ).all()
+        elif name in ["GridArchive", "SlidingBoundariesArchive"]:
+            # These archives have expected grid indices.
+            assert df.loc[0, "index"] == data.archive.grid_to_int_index(
+                [data.grid_indices])[0]
         else:
-            # Other archives have expected grid indices.
-            # TODO: Avoid having to ravel.
-            assert df.loc[0, "index"] == np.ravel_multi_index(
-                data.grid_indices, data.archive.dims)
+            # Archives where indices can't be tested.
+            assert name in ["ProximityArchive"]
 
-        expected_data = [*data.behavior_values, data.objective_value]
-        if include_solutions:
-            expected_data += list(data.solution)
-        if include_metadata:
-            expected_data.append(data.metadata)
-        assert (df.loc[0, "behavior_0":] == expected_data).all()
+        expected_data = [
+            *data.solution, data.objective, *data.measures, data.objective
+        ]
+        assert (df.loc[0, :"threshold"] == expected_data).all()

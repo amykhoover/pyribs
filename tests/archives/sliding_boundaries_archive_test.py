@@ -19,7 +19,7 @@ def data():
 def test_fails_on_dim_mismatch():
     with pytest.raises(ValueError):
         SlidingBoundariesArchive(
-            0,
+            solution_dim=0,
             dims=[10] * 2,  # 2D space here.
             ranges=[(-1, 1)] * 3,  # But 3D space here.
         )
@@ -41,66 +41,57 @@ def test_attributes_correctly_constructed(data):
 @pytest.mark.parametrize("use_list", [True, False], ids=["list", "ndarray"])
 def test_add_to_archive(data, use_list):
     if use_list:
-        status, value = data.archive.add(list(data.solution),
-                                         data.objective_value,
-                                         list(data.behavior_values),
-                                         data.metadata)
+        add_info = data.archive.add_single(list(data.solution), data.objective,
+                                           list(data.measures))
     else:
-        status, value = data.archive.add(data.solution, data.objective_value,
-                                         data.behavior_values, data.metadata)
+        add_info = data.archive.add_single(data.solution, data.objective,
+                                           data.measures)
 
-    assert status == AddStatus.NEW
-    assert np.isclose(value, data.objective_value)
-    assert_archive_elite(data.archive_with_elite, data.solution,
-                         data.objective_value, data.behavior_values,
-                         data.grid_indices, data.metadata)
+    assert add_info["status"] == AddStatus.NEW
+    assert np.isclose(add_info["value"], data.objective)
+    assert_archive_elite(data.archive_with_elite, data.solution, data.objective,
+                         data.measures, data.grid_indices)
 
 
 def test_add_and_overwrite(data):
     """Test adding a new solution with a higher objective value."""
     arbitrary_sol = data.solution + 1
-    arbitrary_metadata = {"foobar": 12}
-    high_objective_value = data.objective_value + 1.0
+    high_objective = data.objective + 1.0
 
-    status, value = data.archive_with_elite.add(arbitrary_sol,
-                                                high_objective_value,
-                                                data.behavior_values,
-                                                arbitrary_metadata)
-    assert status == AddStatus.IMPROVE_EXISTING
-    assert np.isclose(value, high_objective_value - data.objective_value)
-    assert_archive_elite(data.archive_with_elite, arbitrary_sol,
-                         high_objective_value, data.behavior_values,
-                         data.grid_indices, arbitrary_metadata)
+    add_info = data.archive_with_elite.add_single(arbitrary_sol, high_objective,
+                                                  data.measures)
+    assert add_info["status"] == AddStatus.IMPROVE_EXISTING
+    assert np.isclose(add_info["value"], high_objective - data.objective)
+    assert_archive_elite(data.archive_with_elite, arbitrary_sol, high_objective,
+                         data.measures, data.grid_indices)
 
 
 def test_add_without_overwrite(data):
     """Test adding a new solution with a lower objective value."""
     arbitrary_sol = data.solution + 1
-    arbitrary_metadata = {"foobar": 12}
-    low_objective_value = data.objective_value - 1.0
+    low_objective = data.objective - 1.0
 
-    status, value = data.archive_with_elite.add(arbitrary_sol,
-                                                low_objective_value,
-                                                data.behavior_values,
-                                                arbitrary_metadata)
-    assert status == AddStatus.NOT_ADDED
-    assert np.isclose(value, low_objective_value - data.objective_value)
-    assert_archive_elite(data.archive_with_elite, data.solution,
-                         data.objective_value, data.behavior_values,
-                         data.grid_indices, data.metadata)
+    add_info = data.archive_with_elite.add_single(arbitrary_sol, low_objective,
+                                                  data.measures)
+    assert add_info["status"] == AddStatus.NOT_ADDED
+    assert np.isclose(add_info["value"], low_objective - data.objective)
+    assert_archive_elite(data.archive_with_elite, data.solution, data.objective,
+                         data.measures, data.grid_indices)
 
 
 def test_initial_remap():
     """Checks that boundaries and entries are correct after initial remap."""
     # remap_frequency is (10 + 1) * (20 + 1)
-    archive = SlidingBoundariesArchive(2, [10, 20], [(-1, 1), (-2, 2)],
+    archive = SlidingBoundariesArchive(solution_dim=2,
+                                       dims=[10, 20],
+                                       ranges=[(-1, 1), (-2, 2)],
                                        remap_frequency=231,
                                        buffer_capacity=1000)
 
     # Buffer should have 230 entries after this (since the first entry is
     # skipped).
     first = True
-    expected_bcs = []
+    expected_measures = []
     for ix, x in enumerate(np.linspace(-1, 1, 11)):
         for iy, y in enumerate(np.linspace(-2, 2, 21)):
             if first:
@@ -112,18 +103,18 @@ def test_initial_remap():
             if ix == 9 or iy == 19:
                 obj = 1
             else:
-                expected_bcs.append((x, y))
+                expected_measures.append((x, y))
                 obj = 2
 
-            # Solutions are same as BCs.
-            archive.add([x, y], obj, [x, y])
+            # Solutions are same as measures.
+            archive.add_single([x, y], obj, [x, y])
 
     # There are 199 entries because the last entry has not been inserted.
     assert len(archive) == 199
 
     # Buffer should now have 231 entries; hence it remaps.
-    archive.add([-1, -2], 1, [-1, -2])
-    expected_bcs.append((-1, -2))
+    archive.add_single([-1, -2], 1, [-1, -2])
+    expected_measures.append((-1, -2))
 
     assert len(archive) == 200
 
@@ -132,56 +123,52 @@ def test_initial_remap():
     assert np.isclose(archive.boundaries[0], np.linspace(-1, 1, 11)).all()
     assert np.isclose(archive.boundaries[1], np.linspace(-2, 2, 21)).all()
 
-    # Check that all the BCs are as expected.
-    pandas_bcs = archive.as_pandas(include_solutions=False)[[
-        "behavior_0", "behavior_1"
-    ]]
-    bcs = list(pandas_bcs.itertuples(name=None, index=False))
-    assert np.isclose(sorted(bcs), sorted(expected_bcs)).all()
+    # Check that all the measures are as expected.
+    measures = map(tuple, archive.data("measures"))
+    assert np.isclose(sorted(measures), sorted(expected_measures)).all()
 
 
 def test_add_to_archive_with_full_buffer(data):
     for _ in range(data.archive.buffer_capacity + 1):
-        data.archive.add(data.solution, data.objective_value,
-                         data.behavior_values, data.metadata)
+        data.archive.add_single(data.solution, data.objective, data.measures)
 
     # After adding the same elite multiple times, there should only be one
     # elite, and it should be at (0, 0).
-    assert_archive_elite(data.archive, data.solution, data.objective_value,
-                         data.behavior_values, (0, 0), data.metadata)
+    assert_archive_elite(data.archive, data.solution, data.objective,
+                         data.measures, (0, 0))
 
     # Even if another elite is added, it should still go to the same cell
-    # because the behavior values are clipped to the boundaries before being
+    # because the measures are clipped to the boundaries before being
     # inserted.
-    arbitrary_metadata = {"foobar": 12}
-    data.archive.add(2 * data.solution, 2 * data.objective_value,
-                     2 * data.behavior_values, arbitrary_metadata)
-    assert_archive_elite(data.archive, 2 * data.solution,
-                         2 * data.objective_value, 2 * data.behavior_values,
-                         (0, 0), arbitrary_metadata)
+    data.archive.add_single(2 * data.solution, 2 * data.objective,
+                            2 * data.measures)
+    assert_archive_elite(data.archive, 2 * data.solution, 2 * data.objective,
+                         2 * data.measures, (0, 0))
 
 
 def test_adds_solutions_from_old_archive():
     """Solutions from previous archive should be inserted during remap."""
-    archive = SlidingBoundariesArchive(2, [10, 20], [(-1, 1), (-2, 2)],
+    archive = SlidingBoundariesArchive(solution_dim=2,
+                                       dims=[10, 20],
+                                       ranges=[(-1, 1), (-2, 2)],
                                        remap_frequency=231,
                                        buffer_capacity=231)
 
     for x in np.linspace(-1, 1, 11):
         for y in np.linspace(-2, 2, 21):
-            archive.add([x, y], 2, [x, y])
+            archive.add_single([x, y], 2, [x, y])
 
     assert len(archive) == 200
 
-    # Archive gets remapped again, but it should maintain the same BCs since
-    # solutions are the same. All the high-performing solutions should be
+    # Archive gets remapped again, but it should maintain the same measures
+    # since solutions are the same. All the high-performing solutions should be
     # cleared from the buffer since the buffer only has capacity 200.
     for x in np.linspace(-1, 1, 11):
         for y in np.linspace(-2, 2, 21):
-            archive.add([x, y], 1, [x, y])
+            archive.add_single([x, y], 1, [x, y])
 
     assert len(archive) == 200
 
     # The objective values from the previous archive should remain because they
     # are higher.
-    assert (archive.as_pandas(include_solutions=False)["objective"] == 2).all()
+    assert (archive.data(["objective"], "tuple")[0] == 2).all()

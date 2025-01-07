@@ -1,9 +1,14 @@
-"""Uses CMA-ME to train linear agents in Lunar Lander.
+"""Uses CMA-ME to train agents with linear policies in Lunar Lander.
 
-This script uses the same setup as the tutorial, but it also uses Dask to
-parallelize evaluations on a single machine and adds in a CLI. Refer to the
-tutorial here: https://docs.pyribs.org/en/stable/tutorials/lunar_lander.html for
-more info.
+Install the following dependencies before running this example -- swig must be
+installed before box2d can be installed, hence it is a separate command:
+    pip install swig
+    pip install ribs[visualize] tqdm fire gymnasium[box2d]==1.0.0 moviepy>=1.0.0 dask>=2.0.0 distributed>=2.0.0 bokeh>=2.0.0
+
+This script uses the same setup as the tutorial, but it also uses Dask instead
+of Python's multiprocessing to parallelize evaluations on a single machine and
+adds in a CLI. Refer to the tutorial here:
+https://docs.pyribs.org/en/stable/tutorials/lunar_lander.html for more info.
 
 You should not need much familiarity with Dask to read this example. However, if
 you would like to know more about Dask, we recommend referring to the quickstart
@@ -13,11 +18,11 @@ This script creates an output directory (defaults to `lunar_lander_output/`, see
 the --outdir flag) with the following files:
 
     - archive.csv: The CSV representation of the final archive, obtained with
-      as_pandas().
+      data().
     - archive_ccdf.png: A plot showing the (unnormalized) complementary
-      cumulative distribution function of objective values in the archive. For
-      each objective value p on the x-axis, this plot shows the number of
-      solutions that had an objective value of at least p.
+      cumulative distribution function of objectives in the archive. For
+      each objective p on the x-axis, this plot shows the number of
+      solutions that had an objective of at least p.
     - heatmap.png: A heatmap showing the performance of solutions in the
       archive.
     - metrics.json: Metrics about the run, saved as a mapping from the metric
@@ -49,16 +54,16 @@ import time
 from pathlib import Path
 
 import fire
-import gym
+import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from alive_progress import alive_bar
+import tqdm
 from dask.distributed import Client, LocalCluster
 
-from ribs.archives import GridArchive
-from ribs.emitters import ImprovementEmitter
-from ribs.optimizers import Optimizer
+from ribs.archives import ArchiveDataFrame, GridArchive
+from ribs.emitters import EvolutionStrategyEmitter
+from ribs.schedulers import Scheduler
 from ribs.visualize import grid_archive_heatmap
 
 
@@ -82,13 +87,11 @@ def simulate(model, seed=None, video_env=None):
     if video_env is None:
         # Since we are using multiple processes, it is simpler if each worker
         # just creates their own copy of the environment instead of trying to
-        # share the environment. This also makes the function "pure."
-        env = gym.make("LunarLander-v2")
+        # share the environment. This also makes the function "pure." However,
+        # we should use the video_env if it is passed in.
+        env = gym.make("LunarLander-v3")
     else:
         env = video_env
-
-    if seed is not None:
-        env.seed(seed)
 
     action_dim = env.action_space.n
     obs_dim = env.observation_space.shape[0]
@@ -98,16 +101,17 @@ def simulate(model, seed=None, video_env=None):
     impact_x_pos = None
     impact_y_vel = None
     all_y_vels = []
-    obs = env.reset()
+    obs, _ = env.reset(seed=seed)
     done = False
 
     while not done:
         action = np.argmax(model @ obs)  # Linear policy.
-        obs, reward, done, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = env.step(action)
+        done = terminated or truncated
         total_reward += reward
 
         # Refer to the definition of state here:
-        # https://github.com/openai/gym/blob/master/gym/envs/box2d/lunar_lander.py#L306
+        # https://gymnasium.farama.org/environments/box2d/lunar_lander/
         x_pos = obs[0]
         y_vel = obs[3]
         leg0_touch = bool(obs[6])
@@ -133,24 +137,26 @@ def simulate(model, seed=None, video_env=None):
     return total_reward, impact_x_pos, impact_y_vel
 
 
-def create_optimizer(seed, n_emitters, sigma0, batch_size):
-    """Creates the Optimizer based on given configurations.
+def create_scheduler(seed, n_emitters, sigma0, batch_size):
+    """Creates the Scheduler based on given configurations.
 
     See lunar_lander_main() for description of args.
 
     Returns:
-        A pyribs optimizer set up for CMA-ME (i.e. it has ImprovementEmitter's
-        and a GridArchive).
+        A pyribs scheduler set up for CMA-ME (i.e. it has
+        EvolutionStrategyEmitter's and a GridArchive).
     """
-    env = gym.make("LunarLander-v2")
+    env = gym.make("LunarLander-v3")
     action_dim = env.action_space.n
     obs_dim = env.observation_space.shape[0]
     initial_model = np.zeros((action_dim, obs_dim))
     archive = GridArchive(
         solution_dim=initial_model.size,
         dims=[50, 50],  # 50 cells in each dimension.
-        ranges=[(-1.0, 1.0), (-3.0, 0.0)],  # (-1, 1) for x-pos and (-3, 0) for y-vel.
-        seed=seed
+        # (-1, 1) for x-pos and (-3, 0) for y-vel.
+        ranges=[(-1.0, 1.0), (-3.0, 0.0)],
+        seed=seed,
+        qd_score_offset=-600,
     )
 
     # If we create the emitters with identical seeds, they will all output the
@@ -161,26 +167,28 @@ def create_optimizer(seed, n_emitters, sigma0, batch_size):
     seeds = ([None] * n_emitters
              if seed is None else [seed + i for i in range(n_emitters)])
 
+    # We use the EvolutionStrategyEmitter to create an ImprovementEmitter.
     emitters = [
-        ImprovementEmitter(
+        EvolutionStrategyEmitter(
             archive,
-            initial_model.flatten(),
+            x0=initial_model.flatten(),
             sigma0=sigma0,
+            ranker="2imp",
             batch_size=batch_size,
             seed=s,
         ) for s in seeds
     ]
 
-    optimizer = Optimizer(archive, emitters)
-    return optimizer
+    scheduler = Scheduler(archive, emitters)
+    return scheduler
 
 
-def run_search(client, optimizer, env_seed, iterations, log_freq):
+def run_search(client, scheduler, env_seed, iterations, log_freq):
     """Runs the QD algorithm for the given number of iterations.
 
     Args:
         client (Client): A Dask client providing access to workers.
-        optimizer (Optimizer): pyribs optimizer.
+        scheduler (Scheduler): pyribs scheduler.
         env_seed (int): Seed for the environment.
         iterations (int): Iterations to run.
         log_freq (int): Number of iterations to wait before recording metrics.
@@ -203,48 +211,53 @@ def run_search(client, optimizer, env_seed, iterations, log_freq):
             "x": [0],
             "y": [0],
         },
+        "QD Score": {
+            "x": [0],
+            "y": [0],
+        },
     }
 
     start_time = time.time()
-    with alive_bar(iterations) as progress:
-        for itr in range(1, iterations + 1):
-            # Request models from the optimizer.
-            sols = optimizer.ask()
+    for itr in tqdm.trange(1, iterations + 1):
+        # Request models from the scheduler.
+        sols = scheduler.ask()
 
-            # Evaluate the models and record the objectives and BCs.
-            objs, bcs = [], []
+        # Evaluate the models and record the objectives and measures.
+        objs, meas = [], []
 
-            # Ask the Dask client to distribute the simulations among the Dask
-            # workers, then gather the results of the simulations.
-            futures = client.map(lambda model: simulate(model, env_seed), sols)
-            results = client.gather(futures)
+        # Ask the Dask client to distribute the simulations among the Dask
+        # workers, then gather the results of the simulations.
+        futures = client.map(lambda model: simulate(model, env_seed), sols)
+        results = client.gather(futures)
 
-            # Process the results.
-            for obj, impact_x_pos, impact_y_vel in results:
-                objs.append(obj)
-                bcs.append([impact_x_pos, impact_y_vel])
+        # Process the results.
+        for obj, impact_x_pos, impact_y_vel in results:
+            objs.append(obj)
+            meas.append([impact_x_pos, impact_y_vel])
 
-            # Send the results back to the optimizer.
-            optimizer.tell(objs, bcs)
+        # Send the results back to the scheduler.
+        scheduler.tell(objs, meas)
 
-            # Logging.
-            progress()
-            if itr % log_freq == 0 or itr == iterations:
-                elapsed_time = time.time() - start_time
-                metrics["Max Score"]["x"].append(itr)
-                metrics["Max Score"]["y"].append(
-                    optimizer.archive.stats.obj_max)
-                metrics["Archive Size"]["x"].append(itr)
-                metrics["Archive Size"]["y"].append(len(optimizer.archive))
-                print(f"> {itr} itrs completed after {elapsed_time:.2f} s")
-                print(f"  - Max Score: {metrics['Max Score']['y'][-1]}")
-                print(f"  - Archive Size: {metrics['Archive Size']['y'][-1]}")
+        # Logging.
+        if itr % log_freq == 0 or itr == iterations:
+            elapsed_time = time.time() - start_time
+            metrics["Max Score"]["x"].append(itr)
+            metrics["Max Score"]["y"].append(scheduler.archive.stats.obj_max)
+            metrics["Archive Size"]["x"].append(itr)
+            metrics["Archive Size"]["y"].append(len(scheduler.archive))
+            metrics["QD Score"]["x"].append(itr)
+            metrics["QD Score"]["y"].append(scheduler.archive.stats.qd_score)
+            tqdm.tqdm.write(
+                f"> {itr} itrs completed after {elapsed_time:.2f} s\n"
+                f"  - Max Score: {metrics['Max Score']['y'][-1]}\n"
+                f"  - Archive Size: {metrics['Archive Size']['y'][-1]}\n"
+                f"  - QD Score: {metrics['QD Score']['y'][-1]}")
 
     return metrics
 
 
 def save_heatmap(archive, filename):
-    """Saves a heatmap of the optimizer's archive to the filename.
+    """Saves a heatmap of the scheduler's archive to the filename.
 
     Args:
         archive (GridArchive): Archive with results from an experiment.
@@ -279,7 +292,7 @@ def save_metrics(outdir, metrics):
 
 
 def save_ccdf(archive, filename):
-    """Saves a CCDF showing the distribution of the archive's objective values.
+    """Saves a CCDF showing the distribution of the archive's objectives.
 
     CCDF = Complementary Cumulative Distribution Function (see
     https://en.wikipedia.org/wiki/Cumulative_distribution_function#Complementary_cumulative_distribution_function_(tail_distribution)).
@@ -293,14 +306,14 @@ def save_ccdf(archive, filename):
     """
     fig, ax = plt.subplots()
     ax.hist(
-        archive.as_pandas(include_solutions=False)["objective"],
+        archive.data("objective"),
         50,  # Number of cells.
         histtype="step",
         density=False,
         cumulative=-1)  # CCDF rather than CDF.
-    ax.set_xlabel("Objective Value")
+    ax.set_xlabel("Objectives")
     ax.set_ylabel("Num. Entries")
-    ax.set_title("Distribution of Archive Objective Values")
+    ax.set_title("Distribution of Archive Objectives")
     fig.savefig(filename)
 
 
@@ -314,22 +327,20 @@ def run_evaluation(outdir, env_seed):
             retrieve the archive and save videos.
         env_seed (int): Seed for the environment.
     """
-    df = pd.read_csv(outdir / "archive.csv")
+    df = ArchiveDataFrame(pd.read_csv(outdir / "archive.csv"))
+    solutions = df.get_field("solution")
     indices = np.random.permutation(len(df))[:10]
 
     # Use a single env so that all the videos go to the same directory.
-    video_env = gym.wrappers.Monitor(
-        gym.make("LunarLander-v2"),
-        str(outdir / "videos"),
-        force=True,
-        # Default is to write the video for "cubic" episodes -- 0,1,8,etc (see
-        # https://github.com/openai/gym/blob/master/gym/wrappers/monitor.py#L54).
-        # This will ensure all the videos are written.
-        video_callable=lambda idx: True,
+    video_env = gym.wrappers.RecordVideo(
+        gym.make("LunarLander-v3", render_mode="rgb_array"),
+        video_folder=str(outdir / "videos"),
+        # This will ensure all episodes are recorded as videos.
+        episode_trigger=lambda idx: True,
     )
 
     for idx in indices:
-        model = np.array(df.loc[idx, "solution_0":])
+        model = solutions[idx]
         reward, impact_x_pos, impact_y_vel = simulate(model, env_seed,
                                                       video_env)
         print(f"=== Index {idx} ===\n"
@@ -343,7 +354,7 @@ def run_evaluation(outdir, env_seed):
 
 
 def lunar_lander_main(workers=4,
-                      env_seed=1339,
+                      env_seed=52,
                       iterations=500,
                       log_freq=25,
                       n_emitters=5,
@@ -370,11 +381,13 @@ def lunar_lander_main(workers=4,
             solutions selected from the archive in the `outdir`.
     """
     outdir = Path(outdir)
-    outdir.mkdir(exist_ok=True)
 
     if run_eval:
         run_evaluation(outdir, env_seed)
         return
+
+    # Make the directory here so that it is not made when running eval.
+    outdir.mkdir(exist_ok=True)
 
     # Setup Dask. The client connects to a "cluster" running on this machine.
     # The cluster simply manages several concurrent worker processes. If using
@@ -388,13 +401,13 @@ def lunar_lander_main(workers=4,
     client = Client(cluster)
 
     # CMA-ME.
-    optimizer = create_optimizer(seed, n_emitters, sigma0, batch_size)
-    metrics = run_search(client, optimizer, env_seed, iterations, log_freq)
+    scheduler = create_scheduler(seed, n_emitters, sigma0, batch_size)
+    metrics = run_search(client, scheduler, env_seed, iterations, log_freq)
 
     # Outputs.
-    optimizer.archive.as_pandas().to_csv(outdir / "archive.csv")
-    save_ccdf(optimizer.archive, str(outdir / "archive_ccdf.png"))
-    save_heatmap(optimizer.archive, str(outdir / "heatmap.png"))
+    scheduler.archive.data(return_type="pandas").to_csv(outdir / "archive.csv")
+    save_ccdf(scheduler.archive, str(outdir / "archive_ccdf.png"))
+    save_heatmap(scheduler.archive, str(outdir / "heatmap.png"))
     save_metrics(outdir, metrics)
 
 

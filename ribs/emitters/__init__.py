@@ -1,4 +1,10 @@
-"""Emitters output new candidate solutions in QD algorithms.
+"""Emitters generate new candidate solutions in QD algorithms.
+
+More formally, emitters are algorithms that generate solutions and adapt to
+objective, measure, and archive insertion feedback.
+
+The emitters in this module follow a one-layer hierarchy, with all emitters
+inheriting from :class:`~ribs.emitters.EmitterBase`.
 
 .. note::
     Emitters provided here take on the data type of the archive passed to their
@@ -9,25 +15,29 @@
 .. autosummary::
     :toctree:
 
+    ribs.emitters.EvolutionStrategyEmitter
     ribs.emitters.GaussianEmitter
+    ribs.emitters.GeneticAlgorithmEmitter
+    ribs.emitters.GradientArborescenceEmitter
+    ribs.emitters.GradientOperatorEmitter
     ribs.emitters.IsoLineEmitter
-    ribs.emitters.ImprovementEmitter
-    ribs.emitters.RandomDirectionEmitter
-    ribs.emitters.OptimizingEmitter
     ribs.emitters.EmitterBase
 """
 from ribs.emitters._emitter_base import EmitterBase
+from ribs.emitters._evolution_strategy_emitter import EvolutionStrategyEmitter
 from ribs.emitters._gaussian_emitter import GaussianEmitter
-from ribs.emitters._improvement_emitter import ImprovementEmitter
+from ribs.emitters._genetic_algorithm_emitter import GeneticAlgorithmEmitter
+from ribs.emitters._gradient_arborescence_emitter import \
+    GradientArborescenceEmitter
+from ribs.emitters._gradient_operator_emitter import GradientOperatorEmitter
 from ribs.emitters._iso_line_emitter import IsoLineEmitter
-from ribs.emitters._optimizing_emitter import OptimizingEmitter
-from ribs.emitters._random_direction_emitter import RandomDirectionEmitter
 
 __all__ = [
+    "EvolutionStrategyEmitter",
     "GaussianEmitter",
+    "GeneticAlgorithmEmitter",
+    "GradientArborescenceEmitter",
+    "GradientOperatorEmitter",
     "IsoLineEmitter",
-    "ImprovementEmitter",
-    "RandomDirectionEmitter",
-    "OptimizingEmitter",
     "EmitterBase",
 ]

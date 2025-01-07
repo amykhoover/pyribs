@@ -1,37 +1,59 @@
 """Runs various QD algorithms on the Sphere function.
 
+Install the following dependencies before running this example:
+    pip install ribs[visualize] tqdm fire
+
 The sphere function in this example is adapted from Section 4 of Fontaine 2020
 (https://arxiv.org/abs/1912.02400). Namely, each solution value is clipped to
 the range [-5.12, 5.12], and the optimum is moved from [0,..] to [0.4 * 5.12 =
-2.048,..]. Furthermore, the objective values are normalized to the range [0,
+2.048,..]. Furthermore, the objectives are normalized to the range [0,
 100] where 100 is the maximum and corresponds to 0 on the original sphere
 function.
 
-There are two BCs in this example. The first is the sum of the first n/2 clipped
-values of the solution, and the second is the sum of the last n/2 clipped values
-of the solution. Having each BC depend equally on several values in the solution
-space makes the problem more difficult (refer to Fontaine 2020 for more info).
+There are two measures in this example. The first is the sum of the first n/2
+clipped values of the solution, and the second is the sum of the last n/2
+clipped values of the solution. Having each measure depend equally on several
+values in the solution space makes the problem more difficult (refer to
+Fontaine 2020 for more info).
 
 The supported algorithms are:
-- `map_elites`: GridArchive with GaussianEmitter
-- `line_map_elites`: GridArchive with IsoLineEmitter
-- `cvt_map_elites`: CVTArchive with GaussianEmitter
-- `line_cvt_map_elites`: CVTArchive with IsoLineEmitter
-- `cma_me_imp`: GridArchive with ImprovementEmitter
-- `cma_me_imp_mu`: GridArchive with ImprovementEmitter with mu selection rule
-- `cma_me_rd`: GridArchive with RandomDirectionEmitter
-- `cma_me_rd_mu`: GridArchive with RandomDirectionEmitter with mu selection rule
-- `cma_me_opt`: GridArchive with OptimizingEmitter
-- `cma_me_mixed`: GridArchive, and half (7) of the emitter are
-  RandomDirectionEmitter and half (8) are ImprovementEmitter
+- `map_elites`: GridArchive with GaussianEmitter.
+- `line_map_elites`: GridArchive with IsoLineEmitter.
+- `cvt_map_elites`: CVTArchive with GaussianEmitter.
+- `line_cvt_map_elites`: CVTArchive with IsoLineEmitter.
+- `me_map_elites`: MAP-Elites with Bandit Scheduler.
+- `cma_me_imp`: GridArchive with EvolutionStrategyEmitter using
+  TwoStageImprovmentRanker.
+- `cma_me_imp_mu`: GridArchive with EvolutionStrategyEmitter using
+  TwoStageImprovmentRanker and mu selection rule.
+- `cma_me_rd`: GridArchive with EvolutionStrategyEmitter using
+  RandomDirectionRanker.
+- `cma_me_rd_mu`: GridArchive with EvolutionStrategyEmitter using
+  TwoStageRandomDirectionRanker and mu selection rule.
+- `cma_me_opt`: GridArchive with EvolutionStrategyEmitter using ObjectiveRanker
+  with mu selection rule.
+- `cma_me_mixed`: GridArchive with EvolutionStrategyEmitter, where half (7) of
+  the emitter are using TwoStageRandomDirectionRanker and half (8) are
+  TwoStageImprovementRanker.
+- `og_map_elites`: GridArchive with GradientOperatorEmitter, does not use
+  measure gradients.
+- `omg_mega`: GridArchive with GradientOperatorEmitter, uses measure gradients.
+- `cma_mega`: GridArchive with GradientArborescenceEmitter.
+- `cma_mega_adam`: GridArchive with GradientArborescenceEmitter using Adam
+  Optimizer.
+- `cma_mae`: GridArchive (learning_rate = 0.01) with EvolutionStrategyEmitter
+  using ImprovementRanker.
+- `cma_maega`: GridArchive (learning_rate = 0.01) with
+  GradientArborescenceEmitter using ImprovementRanker.
+- `ns_cma`: Novelty Search with CMA-ES; implemented using a ProximityArchive
+  with EvolutionStrategyEmitter. Results are stored in a passive GridArchive.
+- `nslc_cma_imp`: EvolutionStrategyEmitter with a ProximityArchive with local
+  competition turned on. Thus, the archive returns two-stage improvement
+  information that is fed to the EvolutionStrategyEmitter just like in CMA-ME.
 
-All algorithms use 15 emitters, each with a batch size of 37. Each one runs for
-4500 iterations for a total of 15 * 37 * 4500 ~= 2.5M evaluations.
-
-Note that the CVTArchive in this example uses 10,000 cells, as opposed to the
-250,000 (500x500) in the GridArchive, so it is not fair to directly compare
-`cvt_map_elites` and `line_cvt_map_elites` to the other algorithms. However, the
-other algorithms may be fairly compared because they use the same archive.
+The parameters for each algorithm are stored in CONFIG. The parameters
+reproduce the experiments presented in the paper in which each algorithm is
+introduced.
 
 Outputs are saved in the `sphere_output/` directory by default. The archive is
 saved as a CSV named `{algorithm}_{dim}_archive.csv`, while snapshots of the
@@ -46,10 +68,10 @@ heatmap for cma_me_imp with 20 dims.
     ffmpeg -r 6 -i "sphere_output/cma_me_imp_20_heatmap_%*.png" \
         sphere_output/cma_me_imp_20_heatmap_video.mp4
 
-Usage (see sphere_main function for all args):
-    python sphere.py ALGORITHM DIM
+Usage (see sphere_main function for all args or run `python sphere.py --help`):
+    python sphere.py ALGORITHM
 Example:
-    python sphere.py map_elites 20
+    python sphere.py map_elites
 
     # To make numpy and sklearn run single-threaded, set env variables for BLAS
     # and OpenMP:
@@ -57,6 +79,7 @@ Example:
 Help:
     python sphere.py --help
 """
+import copy
 import json
 import time
 from pathlib import Path
@@ -64,25 +87,599 @@ from pathlib import Path
 import fire
 import matplotlib.pyplot as plt
 import numpy as np
-from alive_progress import alive_bar
+import tqdm
 
-from ribs.archives import CVTArchive, GridArchive
-from ribs.emitters import (GaussianEmitter, ImprovementEmitter, IsoLineEmitter,
-                           OptimizingEmitter, RandomDirectionEmitter)
-from ribs.optimizers import Optimizer
+from ribs.archives import CVTArchive, GridArchive, ProximityArchive
+from ribs.emitters import (EvolutionStrategyEmitter, GaussianEmitter,
+                           GradientArborescenceEmitter, GradientOperatorEmitter,
+                           IsoLineEmitter)
+from ribs.schedulers import BanditScheduler, Scheduler
 from ribs.visualize import cvt_archive_heatmap, grid_archive_heatmap
 
+CONFIG = {
+    "map_elites": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": GaussianEmitter,
+            "kwargs": {
+                "sigma": 0.5
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "line_map_elites": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": IsoLineEmitter,
+            "kwargs": {
+                "iso_sigma": 0.1,
+                "line_sigma": 0.2
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cvt_map_elites": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": CVTArchive,
+            "kwargs": {
+                "cells": 10_000,
+                "samples": 100_000,
+                "use_kd_tree": True
+            }
+        },
+        "emitters": [{
+            "class": GaussianEmitter,
+            "kwargs": {
+                "sigma": 0.5
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "line_cvt_map_elites": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": CVTArchive,
+            "kwargs": {
+                "cells": 10_000,
+                "samples": 100_000,
+                "use_kd_tree": True
+            }
+        },
+        "emitters": [{
+            "class": IsoLineEmitter,
+            "kwargs": {
+                "iso_sigma": 0.1,
+                "line_sigma": 0.2
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "me_map_elites": {
+        "dim": 100,
+        "iters": 20_000,
+        "archive_dims": (100, 100),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 50,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "obj"
+            },
+            "num_emitters": 12
+        }, {
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2rd"
+            },
+            "num_emitters": 12
+        }, {
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2imp"
+            },
+            "num_emitters": 12
+        }, {
+            "class": IsoLineEmitter,
+            "kwargs": {
+                "iso_sigma": 0.01,
+                "line_sigma": 0.1
+            },
+            "num_emitters": 12
+        }],
+        "scheduler": {
+            "class": BanditScheduler,
+            "kwargs": {
+                "num_active": 12,
+                "reselect": "terminated"
+            }
+        }
+    },
+    "cma_me_mixed": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2rd"
+            },
+            "num_emitters": 7
+        }, {
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2imp"
+            },
+            "num_emitters": 8
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_me_imp": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2imp",
+                "selection_rule": "filter",
+                "restart_rule": "no_improvement"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_me_imp_mu": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2imp",
+                "selection_rule": "mu",
+                "restart_rule": "no_improvement"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_me_rd": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2rd",
+                "selection_rule": "filter",
+                "restart_rule": "no_improvement"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_me_rd_mu": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2rd",
+                "selection_rule": "mu",
+                "restart_rule": "no_improvement"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_me_opt": {
+        "dim": 20,
+        "iters": 4500,
+        "archive_dims": (500, 500),
+        "use_result_archive": False,
+        "is_dqd": False,
+        "batch_size": 37,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "obj",
+                "selection_rule": "mu",
+                "restart_rule": "basic"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "og_map_elites": {
+        "dim": 1_000,
+        "iters": 10_000,
+        "archive_dims": (100, 100),
+        "use_result_archive": False,
+        "is_dqd": True,
+        # Divide by 2 since half of the 36 solutions are used in ask_dqd(), and
+        # the other half are used in ask().
+        "batch_size": 36 // 2,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": GradientOperatorEmitter,
+            "kwargs": {
+                "sigma": 0.5,
+                "sigma_g": 0.5,
+                "measure_gradients": False,
+                "normalize_grad": False,
+            },
+            "num_emitters": 1
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "omg_mega": {
+        "dim": 1_000,
+        "iters": 10_000,
+        "archive_dims": (100, 100),
+        "use_result_archive": False,
+        "is_dqd": True,
+        # Divide by 2 since half of the 36 solutions are used in ask_dqd(), and
+        # the other half are used in ask().
+        "batch_size": 36 // 2,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": GradientOperatorEmitter,
+            "kwargs": {
+                "sigma": 0.0,
+                "sigma_g": 10.0,
+                "measure_gradients": True,
+                "normalize_grad": True,
+            },
+            "num_emitters": 1
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_mega": {
+        "dim": 1_000,
+        "iters": 10_000,
+        "archive_dims": (100, 100),
+        "use_result_archive": False,
+        "is_dqd": True,
+        "batch_size": 35,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": GradientArborescenceEmitter,
+            "kwargs": {
+                "sigma0": 10.0,
+                "lr": 1.0,
+                "grad_opt": "gradient_ascent",
+                "selection_rule": "mu"
+            },
+            "num_emitters": 1
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_mega_adam": {
+        "dim": 1_000,
+        "iters": 10_000,
+        "archive_dims": (100, 100),
+        "use_result_archive": False,
+        "is_dqd": True,
+        "batch_size": 35,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": -np.inf
+            }
+        },
+        "emitters": [{
+            "class": GradientArborescenceEmitter,
+            "kwargs": {
+                "sigma0": 10.0,
+                "lr": 0.002,
+                "grad_opt": "adam",
+                "selection_rule": "mu"
+            },
+            "num_emitters": 1
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_mae": {
+        "dim": 100,
+        "iters": 10_000,
+        "archive_dims": (100, 100),
+        "use_result_archive": True,
+        "is_dqd": False,
+        "batch_size": 36,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": 0,
+                "learning_rate": 0.01
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "imp",
+                "selection_rule": "mu",
+                "restart_rule": "basic"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "cma_maega": {
+        "dim": 1_000,
+        "iters": 10_000,
+        "archive_dims": (100, 100),
+        "use_result_archive": True,
+        "is_dqd": True,
+        "batch_size": 35,
+        "archive": {
+            "class": GridArchive,
+            "kwargs": {
+                "threshold_min": 0,
+                "learning_rate": 0.01
+            }
+        },
+        "emitters": [{
+            "class": GradientArborescenceEmitter,
+            "kwargs": {
+                "sigma0": 10.0,
+                "lr": 1.0,
+                "ranker": "imp",
+                "grad_opt": "gradient_ascent",
+                "restart_rule": "basic"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "ns_cma": {
+        "dim": 100,
+        "iters": 5000,
+        "archive_dims": (100, 100),
+        "use_result_archive": True,
+        "is_dqd": False,
+        "batch_size": 36,
+        "archive": {
+            "class": ProximityArchive,
+            "kwargs": {
+                # Hyperparameters from Density Descent paper:
+                # https://arxiv.org/abs/2312.11331
+                "k_neighbors": 15,
+                "novelty_threshold": 0.037 * 512,
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "nov",
+                "selection_rule": "mu",
+                "restart_rule": "basic",
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+    "nslc_cma_imp": {
+        "dim": 100,
+        "iters": 5000,
+        "archive_dims": (100, 100),
+        "use_result_archive": True,
+        "is_dqd": False,
+        "batch_size": 36,
+        "archive": {
+            "class": ProximityArchive,
+            "kwargs": {
+                "k_neighbors": 15,
+                # Note: This is untuned.
+                "novelty_threshold": 0.037 * 100,
+                "local_competition": True,
+            }
+        },
+        "emitters": [{
+            "class": EvolutionStrategyEmitter,
+            "kwargs": {
+                "sigma0": 0.5,
+                "ranker": "2imp",
+                "selection_rule": "filter",
+                "restart_rule": "no_improvement"
+            },
+            "num_emitters": 15
+        }],
+        "scheduler": {
+            "class": Scheduler,
+            "kwargs": {}
+        }
+    },
+}
 
-def sphere(sol):
-    """Sphere function evaluation and BCs for a batch of solutions.
+
+def sphere(solution_batch):
+    """Sphere function evaluation and measures for a batch of solutions.
 
     Args:
-        sol (np.ndarray): (batch_size, dim) array of solutions
+        solution_batch (np.ndarray): (batch_size, dim) batch of solutions.
     Returns:
-        objs (np.ndarray): (batch_size,) array of objective values
-        bcs (np.ndarray): (batch_size, 2) array of behavior values
+        objective_batch (np.ndarray): (batch_size,) batch of objectives.
+        objective_grad_batch (np.ndarray): (batch_size, solution_dim) batch of
+            objective gradients.
+        measures_batch (np.ndarray): (batch_size, 2) batch of measures.
+        measures_grad_batch (np.ndarray): (batch_size, 2, solution_dim) batch of
+            measure gradients.
     """
-    dim = sol.shape[1]
+    dim = solution_batch.shape[1]
 
     # Shift the Sphere function so that the optimal value is at x_i = 2.048.
     sphere_shift = 5.12 * 0.4
@@ -90,14 +687,17 @@ def sphere(sol):
     # Normalize the objective to the range [0, 100] where 100 is optimal.
     best_obj = 0.0
     worst_obj = (-5.12 - sphere_shift)**2 * dim
-    raw_obj = np.sum(np.square(sol - sphere_shift), axis=1)
-    objs = (raw_obj - worst_obj) / (best_obj - worst_obj) * 100
+    raw_obj = np.sum(np.square(solution_batch - sphere_shift), axis=1)
+    objective_batch = (raw_obj - worst_obj) / (best_obj - worst_obj) * 100
 
-    # Calculate BCs.
-    clipped = sol.copy()
-    clip_indices = np.where(np.logical_or(clipped > 5.12, clipped < -5.12))
-    clipped[clip_indices] = 5.12 / clipped[clip_indices]
-    bcs = np.concatenate(
+    # Compute gradient of the objective.
+    objective_grad_batch = -2 * (solution_batch - sphere_shift)
+
+    # Calculate measures.
+    clipped = solution_batch.copy()
+    clip_mask = (clipped < -5.12) | (clipped > 5.12)
+    clipped[clip_mask] = 5.12 / clipped[clip_mask]
+    measures_batch = np.concatenate(
         (
             np.sum(clipped[:, :dim // 2], axis=1, keepdims=True),
             np.sum(clipped[:, dim // 2:], axis=1, keepdims=True),
@@ -105,103 +705,105 @@ def sphere(sol):
         axis=1,
     )
 
-    return objs, bcs
+    # Compute gradient of the measures.
+    derivatives = np.ones(solution_batch.shape)
+    derivatives[clip_mask] = -5.12 / np.square(solution_batch[clip_mask])
+
+    mask_0 = np.concatenate((np.ones(dim // 2), np.zeros(dim - dim // 2)))
+    mask_1 = np.concatenate((np.zeros(dim // 2), np.ones(dim - dim // 2)))
+
+    d_measure0 = derivatives * mask_0
+    d_measure1 = derivatives * mask_1
+
+    measures_grad_batch = np.stack((d_measure0, d_measure1), axis=1)
+
+    return (
+        objective_batch,
+        objective_grad_batch,
+        measures_batch,
+        measures_grad_batch,
+    )
 
 
-def create_optimizer(algorithm, dim, seed):
-    """Creates an optimizer based on the algorithm name.
+def create_scheduler(config, algorithm, seed=None):
+    """Creates a scheduler based on the algorithm.
 
     Args:
-        algorithm (str): Name of the algorithm passed into sphere_main.
-        dim (int): Dimensionality of the sphere function.
-        seed (int): Main seed or the various components.
+        config (dict): Configuration dictionary with parameters for the various
+            components.
+        algorithm (string): Name of the algorithm.
+        seed (int): Main seed for the various components.
     Returns:
-        Optimizer: A ribs Optimizer for running the algorithm.
+        ribs.schedulers.Scheduler: A ribs scheduler for running the algorithm.
     """
-    max_bound = dim / 2 * 5.12
+    solution_dim = config["dim"]
+    archive_dims = config["archive_dims"]
+    learning_rate = 1.0 if "learning_rate" not in config["archive"][
+        "kwargs"] else config["archive"]["kwargs"]["learning_rate"]
+    use_result_archive = config["use_result_archive"]
+    max_bound = solution_dim / 2 * 5.12
     bounds = [(-max_bound, max_bound), (-max_bound, max_bound)]
-    initial_sol = np.zeros(dim)
-    batch_size = 37
-    num_emitters = 15
+    initial_sol = np.zeros(solution_dim)
+    mode = "batch"
 
     # Create archive.
-    if algorithm in [
-            "map_elites", "line_map_elites", "cma_me_imp", "cma_me_imp_mu",
-            "cma_me_rd", "cma_me_rd_mu", "cma_me_opt", "cma_me_mixed"
-    ]:
-        archive = GridArchive(solution_dim=dim, dims=(500, 500),
-                              ranges=bounds,
-                              seed=seed)
-    elif algorithm in ["cvt_map_elites", "line_cvt_map_elites"]:
-        archive = CVTArchive(solution_dim=dim,
-                             cells=10_000,
-                             ranges=bounds,
-                             samples=100_000,
-                             use_kd_tree=True)
+    archive_class = config["archive"]["class"]
+    if archive_class == GridArchive:
+        archive = archive_class(solution_dim=solution_dim,
+                                ranges=bounds,
+                                dims=archive_dims,
+                                seed=seed,
+                                **config["archive"]["kwargs"])
+    elif archive_class == ProximityArchive:
+        archive = archive_class(solution_dim=solution_dim,
+                                measure_dim=len(bounds),
+                                seed=seed,
+                                **config["archive"]["kwargs"])
     else:
-        raise ValueError(f"Algorithm `{algorithm}` is not recognized")
+        archive = archive_class(solution_dim=solution_dim,
+                                ranges=bounds,
+                                seed=seed,
+                                **config["archive"]["kwargs"])
 
-    # Create emitters. Each emitter needs a different seed, so that they do not
-    # all do the same thing.
-    emitter_seeds = [None] * num_emitters if seed is None else list(
-        range(seed, seed + num_emitters))
-    if algorithm in ["map_elites", "cvt_map_elites"]:
-        emitters = [
-            GaussianEmitter(archive,
-                            initial_sol,
-                            0.5,
-                            batch_size=batch_size,
-                            seed=s) for s in emitter_seeds
-        ]
-    elif algorithm in ["line_map_elites", "line_cvt_map_elites"]:
-        emitters = [
-            IsoLineEmitter(archive,
-                           initial_sol,
-                           iso_sigma=0.1,
-                           line_sigma=0.2,
-                           batch_size=batch_size,
-                           seed=s) for s in emitter_seeds
-        ]
-    elif algorithm in ["cma_me_imp", "cma_me_imp_mu"]:
-        selection_rule = "filter" if algorithm == "cma_me_imp" else "mu"
-        emitters = [
-            ImprovementEmitter(archive,
-                               initial_sol,
-                               0.5,
-                               batch_size=batch_size,
-                               selection_rule=selection_rule,
-                               seed=s) for s in emitter_seeds
-        ]
-    elif algorithm in ["cma_me_rd", "cma_me_rd_mu"]:
-        selection_rule = "filter" if algorithm == "cma_me_rd" else "mu"
-        emitters = [
-            RandomDirectionEmitter(archive,
-                                   initial_sol,
-                                   0.5,
-                                   batch_size=batch_size,
-                                   selection_rule=selection_rule,
-                                   seed=s) for s in emitter_seeds
-        ]
-    elif algorithm == "cma_me_opt":
-        emitters = [
-            OptimizingEmitter(archive,
-                              initial_sol,
-                              0.5,
-                              batch_size=batch_size,
-                              seed=s) for s in emitter_seeds
-        ]
-    elif algorithm == "cma_me_mixed":
-        emitters = [
-            RandomDirectionEmitter(
-                archive, initial_sol, 0.5, batch_size=batch_size, seed=s)
-            for s in emitter_seeds[:7]
-        ] + [
-            ImprovementEmitter(
-                archive, initial_sol, 0.5, batch_size=batch_size, seed=s)
-            for s in emitter_seeds[7:]
+    # Create result archive.
+    result_archive = None
+    if use_result_archive:
+        result_archive = GridArchive(solution_dim=solution_dim,
+                                     dims=archive_dims,
+                                     ranges=bounds,
+                                     seed=seed)
+
+    # Create emitters. Each emitter needs a different seed so that they do not
+    # all do the same thing, hence we create an rng here to generate seeds. The
+    # rng may be seeded with None or with a user-provided seed.
+    seed_sequence = np.random.SeedSequence(seed)
+    emitters = []
+    for e in config["emitters"]:
+        emitter_class = e["class"]
+        emitters += [
+            emitter_class(
+                archive,
+                x0=initial_sol,
+                **e["kwargs"],
+                batch_size=config["batch_size"],
+                seed=s,
+            ) for s in seed_sequence.spawn(e["num_emitters"])
         ]
 
-    return Optimizer(archive, emitters)
+    # Create Scheduler
+    scheduler_class = config["scheduler"]["class"]
+    scheduler = scheduler_class(archive,
+                                emitters,
+                                result_archive=result_archive,
+                                add_mode=mode,
+                                **config["scheduler"]["kwargs"])
+    scheduler_name = scheduler.__class__.__name__
+
+    print(f"Create {scheduler_name} for {algorithm} with learning rate "
+          f"{learning_rate} and add mode {mode}, using solution dim "
+          f"{solution_dim}, archive dims {archive_dims}, and "
+          f"{len(emitters)} emitters.")
+    return scheduler
 
 
 def save_heatmap(archive, heatmap_path):
@@ -225,8 +827,11 @@ def save_heatmap(archive, heatmap_path):
 
 
 def sphere_main(algorithm,
-                dim=20,
-                itrs=4500,
+                dim=None,
+                itrs=None,
+                archive_dims=None,
+                learning_rate=None,
+                es=None,
                 outdir="sphere_output",
                 log_freq=250,
                 seed=None):
@@ -234,20 +839,52 @@ def sphere_main(algorithm,
 
     Args:
         algorithm (str): Name of the algorithm.
-        dim (int): Dimensionality of solutions.
+        dim (int): Dimensionality of the sphere function.
         itrs (int): Iterations to run.
+        archive_dims (tuple): Dimensionality of the archive.
+        learning_rate (float): The archive learning rate.
+        es (str): If passed, this will set the ES for all
+            EvolutionStrategyEmitter instances.
         outdir (str): Directory to save output.
         log_freq (int): Number of iterations to wait before recording metrics
             and saving heatmap.
         seed (int): Seed for the algorithm. By default, there is no seed.
     """
-    name = f"{algorithm}_{dim}"
+    config = copy.deepcopy(CONFIG[algorithm])
+
+    # Use default dim for each algorithm.
+    if dim is not None:
+        config["dim"] = dim
+
+    # Use default itrs for each algorithm.
+    if itrs is not None:
+        config["iters"] = itrs
+
+    # Use default archive_dim for each algorithm.
+    if archive_dims is not None:
+        config["archive_dims"] = archive_dims
+
+    # Use default learning_rate for each algorithm.
+    if learning_rate is not None:
+        config["archive"]["kwargs"]["learning_rate"] = learning_rate
+
+    # Set ES for all EvolutionStrategyEmitter.
+    if es is not None:
+        for e in config["emitters"]:
+            if e["class"] == EvolutionStrategyEmitter:
+                e["kwargs"]["es"] = es
+
+    name = f"{algorithm}_{config['dim']}"
+    if es is not None:
+        name += f"_{es}"
     outdir = Path(outdir)
     if not outdir.is_dir():
         outdir.mkdir()
 
-    optimizer = create_optimizer(algorithm, dim, seed)
-    archive = optimizer.archive
+    scheduler = create_scheduler(config, algorithm, seed=seed)
+    result_archive = scheduler.result_archive
+    is_dqd = config["is_dqd"]
+    itrs = config["iters"]
     metrics = {
         "QD Score": {
             "x": [0],
@@ -260,40 +897,50 @@ def sphere_main(algorithm,
     }
 
     non_logging_time = 0.0
-    with alive_bar(itrs) as progress:
-        save_heatmap(archive, str(outdir / f"{name}_heatmap_{0:05d}.png"))
+    save_heatmap(result_archive, str(outdir / f"{name}_heatmap_{0:05d}.png"))
 
-        for itr in range(1, itrs + 1):
-            itr_start = time.time()
-            sols = optimizer.ask()
-            objs, bcs = sphere(sols)
-            optimizer.tell(objs, bcs)
-            non_logging_time += time.time() - itr_start
-            progress()
+    for itr in tqdm.trange(1, itrs + 1):
+        itr_start = time.time()
 
-            # Logging and output.
-            final_itr = itr == itrs
-            if itr % log_freq == 0 or final_itr:
-                if final_itr:
-                    archive.as_pandas(include_solutions=final_itr).to_csv(
-                        outdir / f"{name}_archive.csv")
+        if is_dqd:
+            solution_batch = scheduler.ask_dqd()
+            (objective_batch, objective_grad_batch, measures_batch,
+             measures_grad_batch) = sphere(solution_batch)
+            objective_grad_batch = np.expand_dims(objective_grad_batch, axis=1)
+            jacobian_batch = np.concatenate(
+                (objective_grad_batch, measures_grad_batch), axis=1)
+            scheduler.tell_dqd(objective_batch, measures_batch, jacobian_batch)
 
-                # Record and display metrics.
-                metrics["QD Score"]["x"].append(itr)
-                metrics["QD Score"]["y"].append(archive.stats.qd_score)
-                metrics["Archive Coverage"]["x"].append(itr)
-                metrics["Archive Coverage"]["y"].append(archive.stats.coverage)
-                print(f"Iteration {itr} | Archive Coverage: "
-                      f"{metrics['Archive Coverage']['y'][-1] * 100:.3f}% "
-                      f"QD Score: {metrics['QD Score']['y'][-1]:.3f}")
+        solution_batch = scheduler.ask()
+        objective_batch, _, measure_batch, _ = sphere(solution_batch)
+        scheduler.tell(objective_batch, measure_batch)
+        non_logging_time += time.time() - itr_start
 
-                save_heatmap(archive,
-                             str(outdir / f"{name}_heatmap_{itr:05d}.png"))
+        # Logging and output.
+        final_itr = itr == itrs
+        if itr % log_freq == 0 or final_itr:
+            if final_itr:
+                result_archive.data(return_type="pandas").to_csv(
+                    outdir / f"{name}_archive.csv")
+
+            # Record and display metrics.
+            metrics["QD Score"]["x"].append(itr)
+            metrics["QD Score"]["y"].append(result_archive.stats.qd_score)
+            metrics["Archive Coverage"]["x"].append(itr)
+            metrics["Archive Coverage"]["y"].append(
+                result_archive.stats.coverage)
+            tqdm.tqdm.write(
+                f"Iteration {itr} | Archive Coverage: "
+                f"{metrics['Archive Coverage']['y'][-1] * 100:.3f}% "
+                f"QD Score: {metrics['QD Score']['y'][-1]:.3f}")
+
+            save_heatmap(result_archive,
+                         str(outdir / f"{name}_heatmap_{itr:05d}.png"))
 
     # Plot metrics.
     print(f"Algorithm Time (Excludes Logging and Setup): {non_logging_time}s")
-    for metric in metrics:
-        plt.plot(metrics[metric]["x"], metrics[metric]["y"])
+    for metric, values in metrics.items():
+        plt.plot(values["x"], values["y"])
         plt.title(metric)
         plt.xlabel("Iteration")
         plt.savefig(
